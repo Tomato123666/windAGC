@@ -279,7 +279,7 @@ generator.py  ──→  runner.exe  ──→  unified_agc.exe  ──→  eval
 
 ---
 
-## 开发指南（给组员）
+## 开发指南
 
 ### 添加新场景
 
