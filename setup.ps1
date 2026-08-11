@@ -1,3 +1,4 @@
+﻿
 # ============================================================
 # Wind AGC Setup Script
 # Run this ONCE after cloning the repository
@@ -13,7 +14,7 @@ Write-Host "============================================================" -Foreg
 Write-Host ""
 
 # ============================================================
-# 1. Create rt_db_ref junction (avoids Chinese path in .bat)
+# 1. Create rt_db_ref junction
 # ============================================================
 $junction = "tools\rt_db_ref"
 $target = "储能协调控制器实时数据库与缓存模块详细设计\储能协调控制器实时数据库与缓存模块详细设计"
@@ -37,7 +38,6 @@ if (Test-Path $junction) {
 Write-Host ""
 Write-Host "[2/2] Checking dependencies..." -ForegroundColor Yellow
 
-# Python
 try {
     $pyVer = python --version 2>&1
     Write-Host "      Python: $pyVer" -ForegroundColor Green
@@ -45,7 +45,6 @@ try {
     Write-Host "      Python: NOT FOUND (required for HIL testing)" -ForegroundColor Red
 }
 
-# CMake
 try {
     $cmVer = cmake --version 2>&1 | Select-Object -First 1
     Write-Host "      CMake:  $cmVer" -ForegroundColor Green
