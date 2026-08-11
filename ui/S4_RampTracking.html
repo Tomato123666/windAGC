@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S4 爬坡跟踪 — Wind-AGC</title>
+<style>
+:root{
+  --bg-primary:#080c12;--bg-secondary:#0f161f;--bg-panel:#131c28;
+  --bg-card:#182230;--bg-input:#0c141e;
+  --border:#1e3048;--border-active:#2a4a6e;
+  --text-primary:#d0d8e4;--text-secondary:#8899b0;--text-dim:#5a6d85;
+  --cyan:#00d4c8;--green:#00e676;--yellow:#ffb74d;
+  --orange:#ff9100;--red:#ff3d3d;--blue:#448aff;--magenta:#e040fb;
+  --text-bright:#e8f0ff;
+  --font-mono:'Cascadia Code','JetBrains Mono','Consolas',monospace;
+  --font-ui:'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  --radius:3px;--radius-lg:6px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:15px}
+#app{display:flex;flex-direction:column;height:100vh;padding:4px;gap:4px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg-secondary)}
+::-webkit-scrollbar-thumb{background:var(--border-active);border-radius:3px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-lg);flex-shrink:0}
+.header h1{font-size:18px;font-weight:700;color:var(--orange);letter-spacing:1px}
+.header .links{display:flex;gap:10px}
+.header .links a{color:var(--blue);text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid var(--border-active);border-radius:var(--radius);transition:all .25s}
+.header .links a:hover{background:var(--border-active);color:var(--text-bright)}
+.scene-badge{background:#2a1a0a;color:var(--orange);border:1px solid var(--orange);padding:3px 12px;border-radius:12px;font-size:14px;font-weight:700;letter-spacing:1px}
+.kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;flex-shrink:0}
+.kpi{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;text-align:center}
+.kpi .kl{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.kpi .kv{font-family:var(--font-mono);font-size:26px;font-weight:700;line-height:1.1}
+.kpi .ks{font-size:10px;color:var(--text-dim)}
+
+.main{display:grid;grid-template-columns:1fr 1fr;gap:4px;flex:1;min-height:0}
+.panel{background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column}
+.panel-hd{padding:6px 10px;background:var(--bg-secondary);border-bottom:1px solid var(--border);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-secondary)}
+.panel-bd{flex:1;overflow-y:auto;padding:8px}
+
+.ramp-chart{height:240px;background:var(--bg-card);border-radius:var(--radius);position:relative;overflow:hidden}
+.ramp-chart canvas{width:100%;height:100%}
+.ramp-info{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin:6px 0}
+.ramp-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:6px;text-align:center}
+.ramp-card .rl{font-size:10px;color:var(--text-dim)}
+.ramp-card .rv{font-family:var(--font-mono);font-size:18px;font-weight:700}
+.ramp-card .rs{font-size:9px;color:var(--text-dim)}
+
+.turbine-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+.turbine-cell{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:5px;text-align:center;font-size:10px;transition:all .4s}
+.turbine-cell .tid{color:var(--text-dim);font-size:9px}
+.turbine-cell .tp{font-family:var(--font-mono);font-size:12px;font-weight:700}
+.turbine-cell .td{font-size:9px;color:var(--text-dim)}
+.turbine-cell.ramping{border-color:var(--orange);background:rgba(255,145,0,.08)}
+
+.progress-bar{height:8px;background:var(--bg-input);border-radius:4px;margin:4px 0;overflow:hidden}
+.progress-bar .fill{height:100%;border-radius:4px;transition:width .5s}
+.status-box{padding:8px;background:var(--bg-card);border-radius:var(--radius);margin:4px 0;text-align:center;font-size:14px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h1>🟠 S4 爬坡跟踪 — 调度阶跃响应</h1>
+      <span class="scene-badge">PRIORITY 70</span>
+    </div>
+    <div class="links">
+      <a href="../WindAGC_UI.html">🏠 主仪表盘</a>
+      <a href="S3_FrequencyReg.html">◂ S3</a>
+      <a href="S5_Curtailment.html">S5 ▸</a>
+    </div>
+  </div>
+  <div class="kpi-row" id="kpi-row"></div>
+  <div class="main">
+    <div class="panel">
+      <div class="panel-hd">📈 爬坡跟踪曲线</div>
+      <div class="panel-bd">
+        <div class="ramp-chart"><canvas id="ramp-canvas"></canvas></div>
+        <div class="ramp-info">
+          <div class="ramp-card"><div class="rl">爬坡速率</div><div class="rv" style="color:var(--orange)" id="ri-rate">0.0</div><div class="rs">MW/min</div></div>
+          <div class="ramp-card"><div class="rl">跟踪误差</div><div class="rv" id="ri-err">0.0</div><div class="rs">MW</div></div>
+          <div class="ramp-card"><div class="rl">完成度</div><div class="rv" style="color:var(--cyan)" id="ri-comp">0</div><div class="rs">%</div></div>
+        </div>
+        <div class="progress-bar"><div class="fill" id="ramp-fill" style="width:0%;background:var(--orange)"></div></div>
+        <div class="status-box" id="ramp-status" style="color:var(--green)">✅ 稳态 — 无爬坡指令</div>
+        <div style="font-size:11px;color:var(--text-dim);line-height:1.6;padding:8px;background:var(--bg-card);border-radius:var(--radius);margin-top:6px">
+          <b style="color:var(--orange)">S4 触发条件</b><br>
+          调度计划阶跃 |ΔP| > 5 MW → RAMP_TRACKING 模式<br>
+          爬坡率限制: 10% Pn/min = 3 MW/min; 考虑扭矩/桨距机械限制<br>
+          指令类型: STEP (阶跃) / RAMP (斜坡) / CANCEL (取消)<br>
+          KPI: 跟踪误差 < 0.5 MW, 爬坡完成时间 ≤ |ΔP| / 爬坡率
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-hd">💨 风机功率分配 — 爬坡响应</div>
+      <div class="panel-bd">
+        <div style="font-size:10px;color:var(--text-dim)">指令类型: <b id="cmd-type" style="color:var(--orange)">STEP</b> | 目标: <b id="target-mw" style="color:var(--yellow)">15</b> MW | 当前: <b id="actual-mw" style="color:var(--yellow)">0</b> MW</div>
+        <div class="turbine-grid" id="turbine-grid"></div>
+        <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <div class="turbine-cell">
+            <div style="font-size:10px;color:var(--text-dim)">机械限制</div>
+            <div style="font-family:var(--font-mono);font-size:14px;font-weight:700;color:var(--cyan)">扭矩 ≤ 1500 kNm</div>
+            <div style="font-size:9px;color:var(--text-dim)">叶根弯矩 ≤ 5000</div>
+          </div>
+          <div class="turbine-cell">
+            <div style="font-size:10px;color:var(--text-dim)">桨距限制</div>
+            <div style="font-family:var(--font-mono);font-size:14px;font-weight:700;color:var(--blue)">变桨 ≤ 0.3°/s</div>
+            <div style="font-size:9px;color:var(--text-dim)">最大桨距角 8°</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const TURB_C=10,TURB_R=3,CAP=30,RAMP_RATE=3;
+const S={plan:15,planPrev:15,target:15,cycle:0,ramping:false,rampStart:0,wind:8};
+const tur=[];
+let powHist=[],tgtHist=[];
+for(let i=0;i<TURB_C;i++)tur.push({id:`WT_${String(i+1).padStart(2,'0')}`,power:1.5,target:0});
+
+function step(){
+  S.cycle++;S.planPrev=S.plan;
+  // Ramp events
+  if(S.cycle===10){S.plan=22;S.target=22;S.ramping=true;S.rampStart=S.cycle}
+  if(S.cycle===40){S.plan=8;S.target=8;S.ramping=true;S.rampStart=S.cycle}
+  // Smooth plan
+  S.planPrev+=0.2*(S.plan-S.planPrev);
+  let total=0;
+  const err=S.planPrev-total;
+  const stepPerTurb=Math.max(-TURB_R,Math.min(TURB_R,err*0.4/TURB_C));
+  tur.forEach((t,i)=>{
+    t.target+=stepPerTurb;
+    t.target=Math.max(0,Math.min(TURB_R,t.target));
+    const lim=RAMP_RATE*0.3/TURB_C;
+    t.power+=Math.abs(t.target-t.power)>lim?Math.sign(t.target-t.power)*lim:t.target-t.power;
+    t.power=Math.max(0,Math.min(TURB_R,t.power));
+    total+=t.power;
+  });
+  powHist.push(total);tgtHist.push(S.planPrev);
+  if(powHist.length>300){powHist.shift();tgtHist.shift()}
+  if(S.ramping&&Math.abs(total-S.target)<0.3){S.ramping=false}
+  render(total);
+}
+function render(total){
+  const err=total-S.target;
+  const rampRate=Math.abs(total-(powHist[powHist.length-2]||total))*60;
+  const comp=S.ramping?Math.min(100,Math.abs(total-(tgtHist[tgtHist.length-1-S.rampStart]||total))/(Math.abs(S.target-(tgtHist[0]||S.target))+.01)*100):100;
+  const rs=document.getElementById('ramp-status');
+  if(S.ramping){rs.textContent=`🟠 RAMPING — 爬坡中 (${S.cycle-S.rampStart}s)`;rs.style.color='var(--orange)';rs.style.background='rgba(255,145,0,.1)'}
+  else{rs.textContent='✅ 稳态 — 无爬坡指令';rs.style.color='var(--green)';rs.style.background='var(--bg-card)'}
+  document.getElementById('ri-rate').textContent=rampRate.toFixed(1);
+  document.getElementById('ri-err').textContent=err.toFixed(1);
+  document.getElementById('ri-comp').textContent=comp.toFixed(0);
+  document.getElementById('ri-err').style.color=Math.abs(err)<.5?'var(--green)':'var(--orange)';
+  document.getElementById('ramp-fill').style.width=comp+'%';
+  document.getElementById('cmd-type').textContent='STEP';
+  document.getElementById('target-mw').textContent=S.target.toFixed(0);
+  document.getElementById('actual-mw').textContent=total.toFixed(1);
+  document.getElementById('kpi-row').innerHTML=[
+    {l:'计划功率',v:S.planPrev.toFixed(1),s:'MW',c:'var(--blue)'},
+    {l:'实际功率',v:total.toFixed(1),s:'MW',c:'var(--yellow)'},
+    {l:'跟踪误差',v:err.toFixed(1),s:'MW',c:Math.abs(err)<.5?'var(--green)':'var(--orange)'},
+    {l:'爬坡率',v:rampRate.toFixed(1),s:'MW/min',c:'var(--orange)'},
+    {l:'周期',v:S.cycle,s:'',c:'var(--text-dim)'},
+  ].map(k=>`<div class="kpi"><div class="kl">${k.l}</div><div class="kv" style="color:${k.c};font-size:22px">${k.v}</div><div class="ks">${k.s}</div></div>`).join('');
+  const tg=document.getElementById('turbine-grid');
+  tg.innerHTML=tur.map(t=>{const pct=t.power/TURB_R*100;const col=pct>80?'var(--green)':pct>40?'var(--yellow)':'var(--orange)';return`<div class="turbine-cell ${S.ramping?'ramping':''}"><div class="tid">💨 ${t.id}</div><div class="tp" style="color:${col}">${t.power.toFixed(1)} MW</div><div class="td">${pct.toFixed(0)}% | 目标 ${t.target.toFixed(1)}</div></div>`}).join('');
+  // Canvas
+  const cv=document.getElementById('ramp-canvas');
+  const pw=cv.parentElement.clientWidth,ph=cv.parentElement.clientHeight;
+  if(pw<=0||ph<=0)return;
+  cv.width=pw;cv.height=ph;
+  const c=cv.getContext('2d'),w=cv.width,h=cv.height;
+  c.clearRect(0,0,w,h);c.fillStyle='#182230';c.fillRect(0,0,w,h);
+  const xScale=w/Math.max(1,powHist.length),yScale=h/30;
+  [{d:powHist,c:'#ffb74d'},{d:tgtHist,c:'#448aff'}].forEach(({d,cl})=>{
+    c.beginPath();d.forEach((v,i)=>{const x=i*xScale,y=h-v*yScale;if(i===0)c.moveTo(x,y);else c.lineTo(x,y)});
+    c.strokeStyle=cl;c.lineWidth=2;c.setLineDash(cl==='#448aff'?[6,3]:[]);c.stroke();c.setLineDash([]);
+  });
+}
+setInterval(step,1000);setTimeout(step,100);
+</script>
+</body>
+</html>

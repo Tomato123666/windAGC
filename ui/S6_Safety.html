@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S6 安全保护 — Wind-AGC</title>
+<style>
+:root{
+  --bg-primary:#080c12;--bg-secondary:#0f161f;--bg-panel:#131c28;
+  --bg-card:#182230;--bg-input:#0c141e;
+  --border:#1e3048;--border-active:#2a4a6e;
+  --text-primary:#d0d8e4;--text-secondary:#8899b0;--text-dim:#5a6d85;
+  --cyan:#00d4c8;--green:#00e676;--yellow:#ffb74d;
+  --orange:#ff9100;--red:#ff3d3d;--blue:#448aff;--magenta:#e040fb;
+  --text-bright:#e8f0ff;
+  --font-mono:'Cascadia Code','JetBrains Mono','Consolas',monospace;
+  --font-ui:'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  --radius:3px;--radius-lg:6px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:15px}
+#app{display:flex;flex-direction:column;height:100vh;padding:4px;gap:4px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg-secondary)}
+::-webkit-scrollbar-thumb{background:var(--border-active);border-radius:3px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:var(--bg-secondary);border:1px solid var(--red);border-radius:var(--radius-lg);flex-shrink:0;animation:pulse-hd 2s infinite}
+@keyframes pulse-hd{0%,100%{border-color:var(--red)}50%{border-color:transparent}}
+.header h1{font-size:18px;font-weight:700;color:var(--red);letter-spacing:1px}
+.header .links{display:flex;gap:10px}
+.header .links a{color:var(--blue);text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid var(--border-active);border-radius:var(--radius);transition:all .25s}
+.header .links a:hover{background:var(--border-active);color:var(--text-bright)}
+.scene-badge{background:#2a0a0a;color:var(--red);border:1px solid var(--red);padding:3px 12px;border-radius:12px;font-size:14px;font-weight:700;letter-spacing:1px;animation:pulse-bd .6s infinite}
+@keyframes pulse-bd{0%,100%{opacity:1}50%{opacity:.5}}
+.kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;flex-shrink:0}
+.kpi{background:var(--bg-card);border:1px solid var(--red);border-radius:var(--radius);padding:8px 10px;text-align:center}
+.kpi .kl{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.kpi .kv{font-family:var(--font-mono);font-size:26px;font-weight:700;line-height:1.1}
+.kpi .ks{font-size:10px;color:var(--text-dim)}
+.main{display:grid;grid-template-columns:1fr 1fr;gap:4px;flex:1;min-height:0}
+.panel{background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column}
+.panel-hd{padding:6px 10px;background:var(--bg-secondary);border-bottom:1px solid var(--border);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-secondary)}
+.panel-bd{flex:1;overflow-y:auto;padding:8px}
+
+.safety-banner{background:#2a0a0a;border:1px solid var(--red);border-radius:var(--radius-lg);padding:12px;text-align:center;margin:4px 0}
+.safety-banner .sb-title{font-size:18px;font-weight:800;color:var(--red);letter-spacing:2px}
+.safety-banner .sb-sub{font-size:12px;color:var(--text-secondary);margin-top:2px}
+
+.strategy-grid{display:grid;grid-template-columns:1fr;gap:4px;margin:6px 0}
+.strategy-card{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;transition:all .25s;font-size:12px}
+.strategy-card:hover{border-color:var(--border-active)}
+.strategy-card.active{border-color:var(--red);background:rgba(255,61,61,.08)}
+.strategy-card .sn{font-size:20px;min-width:24px;text-align:center}
+.strategy-card .st{font-weight:700}
+.strategy-card .sd{font-size:10px;color:var(--text-dim)}
+
+.strategy-detail{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px;margin:6px 0;font-size:11px;line-height:1.6}
+.strategy-detail h4{color:var(--red);margin-bottom:4px}
+
+.turbine-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+.turbine-cell{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:5px;text-align:center;font-size:10px;transition:all .4s}
+.turbine-cell .tid{color:var(--text-dim);font-size:9px}
+.turbine-cell .tp{font-family:var(--font-mono);font-size:12px;font-weight:700}
+.turbine-cell .td{font-size:9px;color:var(--text-dim)}
+.turbine-cell.off{border-color:var(--red);opacity:.4}
+.turbine-cell.feather{border-color:var(--orange);background:rgba(255,145,0,.1)}
+
+.cd-ring{width:80px;height:80px;border-radius:50%;border:4px solid var(--border);display:flex;align-items:center;justify-content:center;margin:10px auto;position:relative}
+.cd-ring .rf{position:absolute;inset:-4px;border-radius:50%;border:4px solid transparent;border-top-color:var(--red);animation:spin-ring 1s linear infinite}
+.cd-ring .rv{font-family:var(--font-mono);font-size:28px;font-weight:800;color:var(--red)}
+@keyframes spin-ring{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h1>🔴 S6 安全 — 通信中断 & 极端风况保护</h1>
+      <span class="scene-badge">PRIORITY 100</span>
+    </div>
+    <div class="links">
+      <a href="../WindAGC_UI.html">🏠 主仪表盘</a>
+      <a href="S5_Curtailment.html">◂ S5</a>
+      <a href="S1_SteadyState.html">S1 ▸</a>
+    </div>
+  </div>
+  <div class="kpi-row" id="kpi-row"></div>
+  <div class="main">
+    <div class="panel">
+      <div class="panel-hd">⚠ 安全保护策略 — 三级分级降载</div>
+      <div class="panel-bd">
+        <div class="safety-banner" id="safety-banner">
+          <div class="sb-title" id="sb-title">⚠ 通信中断 — S6 自治模式</div>
+          <div class="sb-sub" id="sb-sub">SCADA 心跳超时 ≥5s | 操作员决策窗口 30s</div>
+        </div>
+        <div class="cd-ring"><div class="rf"></div><div class="rv" id="countdown">30</div></div>
+        <div class="strategy-grid" id="strategy-grid">
+          <div class="strategy-card active" data-sid="1" onclick="setStrategy(1)">
+            <span class="sn">①</span><div><span class="st">Hold Last Value</span><div class="sd">维持通信中断前安全计划值 <b id="safe-plan">15</b> MW，风机保持当前状态</div></div>
+          </div>
+          <div class="strategy-card" data-sid="2" onclick="setStrategy(2)">
+            <span class="sn">②</span><div><span class="st">Safe Ramp-Down</span><div class="sd">以 0.5 MW/步速率安全降载，适用长时间通信中断</div></div>
+          </div>
+          <div class="strategy-card" data-sid="3" onclick="setStrategy(3)">
+            <span class="sn">③</span><div><span class="st">Emergency Feather</span><div class="sd">全场顺桨停机，桨距角→8°，适用极端风况</div></div>
+          </div>
+        </div>
+        <div class="strategy-detail" id="strat-detail">
+          <h4 id="sd-title">① Hold Last Value — 详细说明</h4>
+          <div id="sd-body">
+            • 适用: 短期通信中断 (< 30分钟)<br>
+            • 操作: 所有风机维持通信中断前的功率指令<br>
+            • 风险: 风速变化时可能过发或欠发<br>
+            • 恢复条件: 通信恢复且心跳连续3周期正常 → 退出S6
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-hd">💨 风机安全状态 — 实时降载执行</div>
+      <div class="panel-bd">
+        <div style="font-size:10px;color:var(--text-dim)">子模式: <b id="sub-mode" style="color:var(--red)">COMM_LOSS_FREEZE</b> | 活跃策略: <b id="active-strat" style="color:var(--red)">① Hold</b></div>
+        <div class="turbine-grid" id="turbine-grid"></div>
+        <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <div style="background:var(--bg-card);border:1px solid var(--red);border-radius:var(--radius);padding:6px;text-align:center">
+            <div style="font-size:10px;color:var(--text-dim)">通信状态</div>
+            <div style="font-size:18px;color:var(--red);font-weight:700" id="comm-status-txt">🔌 中断</div>
+            <div style="font-size:9px;color:var(--text-dim)">心跳计数: <b id="hb-count">0</b></div>
+          </div>
+          <div style="background:var(--bg-card);border:1px solid var(--red);border-radius:var(--radius);padding:6px;text-align:center">
+            <div style="font-size:10px;color:var(--text-dim)">极端天气状态</div>
+            <div style="font-size:18px;font-weight:700" id="extreme-txt">—</div>
+            <div style="font-size:9px;color:var(--text-dim)">风速: <b id="ext-ws" style="color:var(--cyan)">8.0</b> m/s</div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);line-height:1.6;padding:8px;background:var(--bg-card);border-radius:var(--radius);margin-top:6px">
+          <b style="color:var(--red)">S6 触发条件 (最高优先级 P100)</b><br>
+          ① 通信中断: SCADA 心跳超时 ≥5 周期 → COMM_LOSS_FREEZE<br>
+          ② 极端风况: 风速 ≥25 m/s (CUT_OUT) → 紧急顺桨<br>
+          ③ 高湍流: 湍流强度 >0.25 → HIGH_TURB 快速降载<br>
+          ④ 风暴穿越: STORM_RIDE → 柔性降载<br>
+          恢复: 通信恢复 & 心跳 3 周期正常 & 风速 < 25 → 退出 S6
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const TURB_C=10,TURB_R=3,CAP=30,WIND_CUTOUT=25;
+let strategy=1,safePlanMW=15,countdown=30,countdownTimer=null;
+const S={commHealthy:false,hbCount:0,hbRecoveryCnt:0,cycle:0,wind:12,extremeType:0,windPrev:12,plan:15};
+const tur=[];
+for(let i=0;i<TURB_C;i++)tur.push({id:`WT_${String(i+1).padStart(2,'0')}`,power:1.5,avail:true,savedPower:1.5});
+
+function setStrategy(n){
+  strategy=n;
+  document.querySelectorAll('#strategy-grid .strategy-card').forEach(c=>c.classList.toggle('active',parseInt(c.dataset.sid)===n));
+  document.getElementById('active-strat').textContent={1:'① Hold',2:'② Ramp-Down',3:'③ Feather'}[n];
+  const details={1:{t:'① Hold Last Value — 详细说明',b:'• 适用: 短期通信中断 (< 30分钟)<br>• 操作: 所有风机维持通信中断前的功率指令<br>• 风险: 风速变化时可能过发或欠发<br>• 恢复条件: 通信恢复且心跳连续3周期正常 → 退出S6'},2:{t:'② Safe Ramp-Down — 详细说明',b:'• 适用: 通信中断持续时间不确定<br>• 操作: 每步降低 0.5MW/台 直到安全水平<br>• 降压速率: 0.5 MW/步/台<br>• 恢复条件: 通信恢复后逐步提升至计划值'},3:{t:'③ Emergency Feather — 详细说明',b:'• 适用: 极端风况 (≥25m/s)、高湍流、风暴穿越<br>• 操作: 全场紧急顺桨停机，桨距角→8°<br>• 响应时间: 立即执行<br>• 恢复条件: 风速恢复至安全范围后才能重新启动'}};
+  document.getElementById('sd-title').textContent=details[n].t;
+  document.getElementById('sd-body').innerHTML=details[n].b;
+}
+
+function step(){
+  S.cycle++;
+  // Comm loss scenario
+  if(S.cycle===5){S.commHealthy=false;S.hbCount=0;S.hbRecoveryCnt=0}
+  if(S.cycle===40){S.commHealthy=true;countdown=0;clearInterval(countdownTimer)}
+  if(!S.commHealthy){S.hbCount++}else{S.hbRecoveryCnt++;if(S.hbRecoveryCnt===3&&countdown<=0){S.hbRecoveryCnt=0;S.hbCount=0}}
+  if(S.hbCount===5&&countdown===30){countdown=30;if(!countdownTimer)countdownTimer=setInterval(()=>{if(countdown>0)countdown--;document.getElementById('countdown').textContent=countdown;if(countdown===0&&!S.commHealthy){if(strategy===3){tur.forEach(t=>{t.power=0;t.avail=false})}}},1000)}
+  // Wind events
+  if(S.cycle===20)S.wind=28; // Extreme wind
+  if(S.cycle===35)S.wind=8;  // Wind recovers
+  S.windPrev+=0.3*(S.wind-S.windPrev);if(Math.abs(S.wind-S.windPrev)<.1)S.windPrev=S.wind;
+  // Determine extreme type
+  if(S.windPrev>=WIND_CUTOUT)S.extremeType=1; // CUT_OUT
+  else if(S.windPrev>20)S.extremeType=2; // HIGH_TURB
+  else S.extremeType=0;
+  // Apply strategy
+  let total=0;
+  tur.forEach((t,i)=>{
+    t.avail=S.windPrev<WIND_CUTOUT;
+    if(!t.avail){t.power=0;return}
+    if(!S.commHealthy||S.extremeType>0){
+      if(strategy===1)t.power=t.savedPower; // Hold
+      else if(strategy===2){t.power=Math.max(0,t.power-0.5);t.savedPower=t.power} // Ramp down
+      else{t.power=0;t.avail=false} // Feather
+    }else{t.power+=0.3*(t.savedPower-t.power);t.power=Math.max(0,Math.min(TURB_R,t.power))}
+    total+=t.power;
+  });
+  if(S.commHealthy&&S.hbRecoveryCnt>=3)S.cycle=S.cycle; // Exit S6 condition
+
+  // Render
+  const inS6=!S.commHealthy||S.extremeType>0;
+  document.getElementById('sb-title').textContent=S.extremeType>0?`⛈ 极端风况 — 紧急保护 (${S.extremeType===1?'CUT_OUT':'HIGH_TURB'})`:(!S.commHealthy?'⚠ 通信中断 — S6 自治模式':'✅ 通信已恢复 — 退出S6');
+  document.getElementById('sb-sub').textContent=S.extremeType>0?`风速 ${S.windPrev.toFixed(1)} m/s | 切出阈值 ${WIND_CUTOUT} m/s`:(!S.commHealthy?`SCADA 心跳超时 ≥5s (计数:${S.hbCount}) | 决策窗口 ${countdown}s`:`心跳恢复 ${S.hbRecoveryCnt}/3 | 连续确认中`);
+  document.getElementById('countdown').textContent=countdown;
+  document.getElementById('countdown').style.color=countdown<=10?'var(--red)':'var(--orange)';
+  document.getElementById('safe-plan').textContent=safePlanMW.toFixed(0);
+  document.getElementById('comm-status-txt').textContent=S.commHealthy?'🟢 正常':'🔌 中断';
+  document.getElementById('comm-status-txt').style.color=S.commHealthy?'var(--green)':'var(--red)';
+  document.getElementById('hb-count').textContent=S.hbCount;
+  document.getElementById('extreme-txt').textContent=S.extremeType===1?'🔴 CUT_OUT 切出':S.extremeType===2?'🟠 HIGH_TURB 高湍流':'🟢 正常';
+  document.getElementById('extreme-txt').style.color=S.extremeType===1?'var(--red)':S.extremeType===2?'var(--orange)':'var(--green)';
+  document.getElementById('ext-ws').textContent=S.windPrev.toFixed(1);
+  document.getElementById('sub-mode').textContent=S.extremeType>0?'EXTREME_WIND_AUTONOMOUS':(!S.commHealthy?'COMM_LOSS_FREEZE':'NORMAL');
+  document.getElementById('kpi-row').innerHTML=[
+    {l:'通信',v:S.commHealthy?'OK':'LOST',s:'',c:S.commHealthy?'var(--green)':'var(--red)'},
+    {l:'心跳计数',v:S.hbCount,s:'cycles',c:S.hbCount>5?'var(--red)':'var(--yellow)'},
+    {l:'倒计时',v:countdown,s:'s',c:countdown<=10?'var(--red)':'var(--orange)'},
+    {l:'主动策略',v:{1:'Hold',2:'RampDn',3:'Feather'}[strategy],s:'',c:'var(--red)'},
+    {l:'风速',v:S.windPrev.toFixed(1),s:'m/s',c:S.windPrev>=WIND_CUTOUT?'var(--red)':'var(--cyan)'},
+  ].map(k=>`<div class="kpi"><div class="kl">${k.l}</div><div class="kv" style="color:${k.c};font-size:20px">${k.v}</div><div class="ks">${k.s}</div></div>`).join('');
+  const tg=document.getElementById('turbine-grid');
+  tg.innerHTML=tur.map(t=>{const pct=t.avail?t.power/TURB_R*100:0;const col=t.avail?(pct>80?'var(--green)':pct>40?'var(--yellow)':'var(--orange)'):'var(--red)';const cls=!t.avail?'off':strategy===3?'feather':'';return`<div class="turbine-cell ${cls}"><div class="tid">💨 ${t.id}</div><div class="tp" style="color:${col}">${t.avail?t.power.toFixed(1):'OFF'}</div><div class="td">${t.avail?pct.toFixed(0)+'% | 保存 '+t.savedPower.toFixed(0):'STOPPED'}</div></div>`}).join('');
+}
+setInterval(step,1000);step();
+window.setStrategy=setStrategy;
+</script>
+</body>
+</html>

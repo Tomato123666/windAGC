@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S2 风速扰动抑制 — Wind-AGC</title>
+<style>
+:root{
+  --bg-primary:#080c12;--bg-secondary:#0f161f;--bg-panel:#131c28;
+  --bg-card:#182230;--bg-input:#0c141e;
+  --border:#1e3048;--border-active:#2a4a6e;
+  --text-primary:#d0d8e4;--text-secondary:#8899b0;--text-dim:#5a6d85;
+  --cyan:#00d4c8;--green:#00e676;--yellow:#ffb74d;
+  --orange:#ff9100;--red:#ff3d3d;--blue:#448aff;--magenta:#e040fb;
+  --text-bright:#e8f0ff;
+  --font-mono:'Cascadia Code','JetBrains Mono','Consolas',monospace;
+  --font-ui:'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  --radius:3px;--radius-lg:6px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:15px}
+#app{display:flex;flex-direction:column;height:100vh;padding:4px;gap:4px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg-secondary)}
+::-webkit-scrollbar-thumb{background:var(--border-active);border-radius:3px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-lg);flex-shrink:0}
+.header h1{font-size:18px;font-weight:700;color:var(--cyan);letter-spacing:1px}
+.header .links{display:flex;gap:10px}
+.header .links a{color:var(--blue);text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid var(--border-active);border-radius:var(--radius);transition:all .25s}
+.header .links a:hover{background:var(--border-active);color:var(--text-bright)}
+.scene-badge{background:#0a2a1a;color:var(--cyan);border:1px solid var(--cyan);padding:3px 12px;border-radius:12px;font-size:14px;font-weight:700;letter-spacing:1px}
+.kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;flex-shrink:0}
+.kpi{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;text-align:center}
+.kpi .kl{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.kpi .kv{font-family:var(--font-mono);font-size:26px;font-weight:700;line-height:1.1}
+.kpi .ks{font-size:10px;color:var(--text-dim)}
+.kpi.alarm{border-color:var(--red);animation:pulse .8s infinite}
+@keyframes pulse{0%,100%{border-color:var(--red)}50%{border-color:transparent}}
+
+.main{display:grid;grid-template-columns:1fr 1fr;gap:4px;flex:1;min-height:0}
+.panel{background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column}
+.panel-hd{padding:6px 10px;background:var(--bg-secondary);border-bottom:1px solid var(--border);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-secondary)}
+.panel-bd{flex:1;overflow-y:auto;padding:8px}
+
+.wind-chart{height:200px;background:var(--bg-card);border-radius:var(--radius);position:relative;overflow:hidden;margin:4px 0}
+.wind-chart canvas{width:100%;height:100%}
+.wind-indicator{display:flex;justify-content:space-between;padding:4px 0;font-size:10px;color:var(--text-dim)}
+.wind-indicator span{min-width:50px;text-align:center;font-family:var(--font-mono)}
+
+.turbine-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-top:6px}
+.turbine-cell{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:5px;text-align:center;font-size:10px;transition:all .4s}
+.turbine-cell .tid{color:var(--text-dim);font-size:9px}
+.turbine-cell .tp{font-family:var(--font-mono);font-size:12px;font-weight:700}
+.turbine-cell .tw{font-size:9px;color:var(--text-dim)}
+.turbine-cell.gust{border-color:var(--orange);background:rgba(255,145,0,.1)}
+
+.suppress-bar{height:6px;background:var(--bg-input);border-radius:3px;margin:4px 0;overflow:hidden}
+.suppress-bar .fill{height:100%;border-radius:3px;transition:width .5s}
+.status-box{padding:8px;background:var(--bg-card);border-radius:var(--radius);margin:4px 0;text-align:center;font-size:14px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h1>🔵 S2 风速扰动 — 波动抑制 & 功率平滑</h1>
+      <span class="scene-badge">PRIORITY 80</span>
+    </div>
+    <div class="links">
+      <a href="../WindAGC_UI.html">🏠 主仪表盘</a>
+      <a href="S1_SteadyState.html">◂ S1</a>
+      <a href="S3_FrequencyReg.html">S3 ▸</a>
+    </div>
+  </div>
+  <div class="kpi-row" id="kpi-row"></div>
+  <div class="main">
+    <div class="panel">
+      <div class="panel-hd">🌬 风速实时曲线 & 波动检测</div>
+      <div class="panel-bd">
+        <div class="wind-chart"><canvas id="wind-canvas"></canvas></div>
+        <div class="wind-indicator">
+          <span style="color:var(--red)">切出 25</span><span style="color:var(--green)">额定 12</span><span style="color:var(--yellow)">切入 3</span><span>当前 <b style="color:var(--cyan)" id="ws-now">8.0</b></span>
+          <span>变化率 <b id="ws-rate">0.0</b> m/s²</span>
+        </div>
+        <div class="status-box" id="gust-status" style="color:var(--green)">✅ 风速稳定 — 无扰动</div>
+        <div class="suppress-bar"><div class="fill" id="suppress-fill" style="width:0%;background:var(--green)"></div></div>
+        <div style="font-size:9px;color:var(--text-dim);text-align:center">波动抑制率</div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-dim);line-height:1.6;padding:8px;background:var(--bg-card);border-radius:var(--radius)">
+          <b style="color:var(--cyan)">S2 场景说明</b><br>
+          风速突变检测阈值 >1.5 m/s（WIND_GUST），触发后进入 SUPPRESS 模式。<br>
+          策略：锁存扰动前功率基线，限制变化率 ≤ 5% Pn/s；恢复条件：风速稳定 ≥5个周期<br>
+          且波动幅度 < 0.3 m/s。KPI: 波动抑制率 >5%。
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-hd">💨 风机响应 — 功率平滑</div>
+      <div class="panel-bd">
+        <div style="font-size:10px;color:var(--text-dim)">锁定基线: <b id="baseline-val" style="color:var(--blue)">15.0</b> MW | 当前功率: <b id="cur-power" style="color:var(--yellow)">0.0</b> MW</div>
+        <div class="turbine-grid" id="turbine-grid"></div>
+        <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <div class="turbine-cell">
+            <div style="font-size:10px;color:var(--text-dim)">功率波动幅度</div>
+            <div style="font-family:var(--font-mono);font-size:20px;font-weight:700;color:var(--orange)" id="pow-amp">0.0</div>
+            <div style="font-size:9px;color:var(--text-dim)">MW</div>
+          </div>
+          <div class="turbine-cell">
+            <div style="font-size:10px;color:var(--text-dim)">抑制持续时间</div>
+            <div style="font-family:var(--font-mono);font-size:20px;font-weight:700;color:var(--cyan)" id="suppress-dur">0</div>
+            <div style="font-size:9px;color:var(--text-dim)">秒</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const TURB_C=10,TURB_R=3,WIND_RATED=12,WIND_CUTIN=3,WIND_CUTOUT=25,WIND_GUST=1.5;
+const S={wind:8,windPrev:8,freq:50,plan:15,cycle:0,gust:false,gustCycle:0,basePower:0,preWind:8,stableCnt:0};
+const tur=[];
+let windHist=[];
+for(let i=0;i<TURB_C;i++)tur.push({id:`WT_${String(i+1).padStart(2,'0')}`,power:1.5,target:0,wind:8});
+
+function windCurve(ws){if(ws<WIND_CUTIN)return 0;if(ws>=WIND_RATED)return TURB_R;const r=(ws-WIND_CUTIN)/(WIND_RATED-WIND_CUTIN);return TURB_R*r*r*r}
+
+let total=0;
+function step(){
+  S.cycle++;
+  // Inject gust at cycle 15
+  if(S.cycle===15&&!S.gust)S.wind=22;
+  if(S.cycle===40&&S.gust)S.wind=8;
+  // Smooth wind transition
+  const dw=S.wind-S.windPrev;
+  if(Math.abs(dw)>WIND_GUST&&S.cycle>3){S.gust=true;S.gustCycle=S.cycle;S.basePower=total;S.preWind=S.windPrev}
+  const ws=S.wind;S.windPrev+=0.15*(ws-S.windPrev);
+  if(Math.abs(S.wind-S.windPrev)<.05)S.windPrev=S.wind;
+  windHist.push(S.windPrev);if(windHist.length>300)windHist.shift();
+  // Stability check
+  const recent=windHist.slice(-5);
+  const avg=recent.reduce((s,v)=>s+v,0)/recent.length;
+  if(recent.every(v=>Math.abs(v-avg)<0.3))S.stableCnt++;else S.stableCnt=0;
+  if(S.gust&&S.stableCnt>=5){S.gust=false;S.stableCnt=0}
+  // Turbine response
+  total=0;
+  tur.forEach((t,i)=>{
+    const tWind=S.windPrev*(0.85+Math.sin(i)*0.15);
+    t.wind=tWind;
+    const mppt=windCurve(tWind);
+    if(S.gust){t.target=S.basePower/TURB_C;t.target=Math.min(t.target,mppt)}else{t.target=mppt}
+    const lim=(S.gust?0.15:1)*0.3;
+    t.power+=lim*(t.target-t.power);t.power=Math.max(0,Math.min(TURB_R,t.power));
+    total+=t.power;
+  });
+  if(!S.gust)S.basePower=total;
+  render();
+}
+function render(){
+  const ws=S.windPrev;
+  const amp=total-S.basePower;
+  const suppressRate=S.gust?Math.max(0,Math.abs(amp)/(Math.abs(S.preWind-S.basePower)+.01)*100):0;
+  document.getElementById('ws-now').textContent=ws.toFixed(1);
+  document.getElementById('ws-rate').textContent=((ws-(windHist[windHist.length-2]||ws))*10).toFixed(1);
+  const gs=document.getElementById('gust-status');
+  if(ws>=WIND_CUTOUT){gs.textContent='🔴 极端风况 — 切出保护!';gs.style.color='var(--red)';gs.style.background='#2a0a0a'}
+  else if(S.gust){gs.textContent=`⚠ 风速阶跃检测! 抑制中… (${S.cycle-S.gustCycle}s)`;gs.style.color='var(--orange)';gs.style.background='rgba(255,145,0,.1)'}
+  else{gs.textContent='✅ 风速稳定 — 无扰动';gs.style.color='var(--green)';gs.style.background='var(--bg-card)'}
+  document.getElementById('suppress-fill').style.width=suppressRate+'%';
+  document.getElementById('suppress-fill').style.background=suppressRate>10?'var(--green)':'var(--yellow)';
+  document.getElementById('baseline-val').textContent=S.basePower.toFixed(1);
+  document.getElementById('cur-power').textContent=total.toFixed(1);
+  document.getElementById('pow-amp').textContent=Math.abs(amp).toFixed(1);
+  document.getElementById('suppress-dur').textContent=S.gust?S.cycle-S.gustCycle:0;
+  const tg=document.getElementById('turbine-grid');
+  tg.innerHTML=tur.map(t=>{const pct=t.power/TURB_R*100;const col=pct>80?'var(--green)':pct>40?'var(--yellow)':'var(--orange)';const gustCls=S.gust?' gust':'';return`<div class="turbine-cell${gustCls}"><div class="tid">💨 ${t.id}</div><div class="tp" style="color:${col}">${t.power.toFixed(1)} MW</div><div class="tw">${pct.toFixed(0)}% | ${t.wind.toFixed(0)}m/s</div></div>`}).join('');
+  document.getElementById('kpi-row').innerHTML=[
+    {l:'风速',v:ws.toFixed(1),s:'m/s',c:ws>=WIND_CUTOUT?'var(--red)':S.gust?'var(--orange)':'var(--cyan)'},
+    {l:'全场功率',v:total.toFixed(1),s:'MW',c:'var(--yellow)'},
+    {l:'锁定基线',v:S.basePower.toFixed(1),s:'MW',c:'var(--blue)'},
+    {l:'抑制率',v:suppressRate.toFixed(1),s:'%',c:suppressRate>10?'var(--green)':'var(--yellow)'},
+    {l:'周期',v:S.cycle,s:'',c:'var(--text-dim)'},
+  ].map(k=>`<div class="kpi ${k.c==='var(--red)'?'alarm':''}"><div class="kl">${k.l}</div><div class="kv" style="color:${k.c};font-size:22px">${k.v}</div><div class="ks">${k.s}</div></div>`).join('');
+  // Canvas
+  const cv=document.getElementById('wind-canvas');
+  const pw=cv.parentElement.clientWidth,ph=cv.parentElement.clientHeight;
+  if(pw<=0||ph<=0)return;
+  cv.width=pw;cv.height=ph;
+  const c=cv.getContext('2d'),w=cv.width,h=cv.height;
+  c.clearRect(0,0,w,h);c.fillStyle='#182230';c.fillRect(0,0,w,h);
+  // Wind curve
+  const hd=windHist.slice(-200),xScale=w/Math.max(1,hd.length),yScale=h/30;
+  c.beginPath();
+  hd.forEach((v,i)=>{const x=i*xScale,y=h-v*yScale;if(i===0)c.moveTo(x,y);else c.lineTo(x,y)});
+  c.strokeStyle='#00d4c8';c.lineWidth=2;c.stroke();
+  // Reference lines
+  [3,12,25].forEach(r=>{const y=h-r*yScale;c.beginPath();c.moveTo(0,y);c.lineTo(w,y);c.strokeStyle=r===12?'#00e676':r===25?'#ff3d3d':'#ffb74d';c.setLineDash([4,6]);c.lineWidth=1;c.stroke();c.setLineDash([])});
+}
+setInterval(step,1000);setTimeout(step,100);
+</script>
+</body>
+</html>

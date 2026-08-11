@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S5 限电优化 — Wind-AGC</title>
+<style>
+:root{
+  --bg-primary:#080c12;--bg-secondary:#0f161f;--bg-panel:#131c28;
+  --bg-card:#182230;--bg-input:#0c141e;
+  --border:#1e3048;--border-active:#2a4a6e;
+  --text-primary:#d0d8e4;--text-secondary:#8899b0;--text-dim:#5a6d85;
+  --cyan:#00d4c8;--green:#00e676;--yellow:#ffb74d;
+  --orange:#ff9100;--red:#ff3d3d;--blue:#448aff;--magenta:#e040fb;
+  --text-bright:#e8f0ff;
+  --font-mono:'Cascadia Code','JetBrains Mono','Consolas',monospace;
+  --font-ui:'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  --radius:3px;--radius-lg:6px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:15px}
+#app{display:flex;flex-direction:column;height:100vh;padding:4px;gap:4px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg-secondary)}
+::-webkit-scrollbar-thumb{background:var(--border-active);border-radius:3px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-lg);flex-shrink:0}
+.header h1{font-size:18px;font-weight:700;color:var(--magenta);letter-spacing:1px}
+.header .links{display:flex;gap:10px}
+.header .links a{color:var(--blue);text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid var(--border-active);border-radius:var(--radius);transition:all .25s}
+.header .links a:hover{background:var(--border-active);color:var(--text-bright)}
+.scene-badge{background:#1a0a2a;color:var(--magenta);border:1px solid var(--magenta);padding:3px 12px;border-radius:12px;font-size:14px;font-weight:700;letter-spacing:1px}
+.kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;flex-shrink:0}
+.kpi{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;text-align:center}
+.kpi .kl{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.kpi .kv{font-family:var(--font-mono);font-size:26px;font-weight:700;line-height:1.1}
+.kpi .ks{font-size:10px;color:var(--text-dim)}
+.kpi.warn{border-color:var(--magenta)}
+.main{display:grid;grid-template-columns:1fr 1fr;gap:4px;flex:1;min-height:0}
+.panel{background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column}
+.panel-hd{padding:6px 10px;background:var(--bg-secondary);border-bottom:1px solid var(--border);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-secondary)}
+.panel-bd{flex:1;overflow-y:auto;padding:8px}
+.turbine-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+.turbine-cell{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:5px;text-align:center;font-size:10px;transition:all .4s}
+.turbine-cell .tid{color:var(--text-dim);font-size:9px}
+.turbine-cell .tp{font-family:var(--font-mono);font-size:12px;font-weight:700}
+.turbine-cell .td{font-size:9px;color:var(--text-dim)}
+.turbine-cell.curtailed{border-color:var(--magenta);background:rgba(224,64,251,.08)}
+.mode-select{display:flex;gap:4px;margin:4px 0}
+.mode-btn{flex:1;padding:6px;text-align:center;background:var(--bg-card);border:1px solid var(--border-active);border-radius:var(--radius);cursor:pointer;font-size:11px;font-weight:600;color:var(--text-secondary);transition:all .25s}
+.mode-btn:hover{background:var(--border-active);color:var(--text-bright)}
+.mode-btn.sel{border-color:var(--magenta);color:var(--magenta);background:rgba(224,64,251,.1)}
+.progress-bar{height:6px;background:var(--bg-input);border-radius:3px;margin:4px 0;overflow:hidden}
+.progress-bar .fill{height:100%;border-radius:3px;transition:width .5s}
+.status-box{padding:8px;background:var(--bg-card);border-radius:var(--radius);margin:4px 0;text-align:center;font-size:14px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h1>🟣 S5 限电 — 深度限电 & 备用优化</h1>
+      <span class="scene-badge">PRIORITY 65</span>
+    </div>
+    <div class="links">
+      <a href="../WindAGC_UI.html">🏠 主仪表盘</a>
+      <a href="S4_RampTracking.html">◂ S4</a>
+      <a href="S6_Safety.html">S6 ▸</a>
+    </div>
+  </div>
+  <div class="kpi-row" id="kpi-row"></div>
+  <div class="main">
+    <div class="panel">
+      <div class="panel-hd">📊 限电优化控制</div>
+      <div class="panel-bd">
+        <div class="status-box" id="curt-status" style="color:var(--magenta)">🟣 深度限电模式 — 限电比 > 40%</div>
+        <div style="font-size:10px;color:var(--text-dim);margin:6px 0">限电模式选择:</div>
+        <div class="mode-select" id="mode-btns">
+          <div class="mode-btn sel" data-mode="A" onclick="setMode('A')">① 均匀限电<br><span style="font-size:9px;color:var(--text-dim)">MODE A</span></div>
+          <div class="mode-btn" data-mode="B" onclick="setMode('B')">② 部分运行<br><span style="font-size:9px;color:var(--text-dim)">MODE B</span></div>
+          <div class="mode-btn" data-mode="C" onclick="setMode('C')">③ 转子储能<br><span style="font-size:9px;color:var(--text-dim)">MODE C</span></div>
+        </div>
+        <div style="margin-top:6px">
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim)"><span>限电比例</span><b id="curt-ratio" style="color:var(--magenta)">60%</b></div>
+          <div class="progress-bar"><div class="fill" id="curt-fill" style="width:60%;background:var(--magenta)"></div></div>
+        </div>
+        <div class="ramp-info" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px">
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:6px;text-align:center">
+            <div style="font-size:10px;color:var(--text-dim)">上调备用</div>
+            <div style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--green)" id="res-up">3.0</div>
+            <div style="font-size:9px;color:var(--text-dim)">MW</div>
+          </div>
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:6px;text-align:center">
+            <div style="font-size:10px;color:var(--text-dim)">下调备用</div>
+            <div style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--orange)" id="res-dn">2.0</div>
+            <div style="font-size:9px;color:var(--text-dim)">MW</div>
+          </div>
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:6px;text-align:center">
+            <div style="font-size:10px;color:var(--text-dim)">热备用机</div>
+            <div style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--cyan)" id="hot-sp">0</div>
+            <div style="font-size:9px;color:var(--text-dim)">台</div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);line-height:1.6;padding:8px;background:var(--bg-card);border-radius:var(--radius);margin-top:6px">
+          <b style="color:var(--magenta)">S5 触发条件</b><br>
+          限电比例 R > 40% → DEEP_CURTAILMENT 模式<br>
+          三模式: A均匀限电 | B部分运行(部分停机) | C转子储能用转子惯性<br>
+          综合考虑: 安全指数S ≥0.5 | 疲劳累积 | 启停计数 | 热备用时间<br>
+          KPI: 限电能耗最小化 + 安全裕度最大化
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-hd">💨 风机限电分配</div>
+      <div class="panel-bd">
+        <div style="font-size:10px;color:var(--text-dim)">调度计划: <b style="color:var(--blue)">5.0</b> MW | 可用功率: <b id="avail-pow" style="color:var(--yellow)">24.0</b> MW | 限电后: <b id="curt-pow" style="color:var(--magenta)">5.0</b> MW</div>
+        <div class="turbine-grid" id="turbine-grid"></div>
+        <div style="margin-top:6px;display:flex;gap:6px;font-size:9px;color:var(--text-dim)">
+          <span>🟢 满发: <b id="full-cnt" style="color:var(--green)">0</b></span>
+          <span>🟣 限电: <b id="curt-cnt" style="color:var(--magenta)">10</b></span>
+          <span>🔴 停机: <b id="stop-cnt" style="color:var(--red)">0</b></span>
+          <span>🟡 热备: <b id="hs-cnt" style="color:var(--yellow)">0</b></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const TURB_C=10,TURB_R=3,CAP=30,CURT_R=0.6,CURT_PLAN=5;
+const S={plan:5,curtailRatio:0.6,curtMode:'A',cycle:0,wind:12};
+const tur=[];
+const safetyIdx=[0.9,0.85,0.7,0.95,0.6,0.88,0.55,0.92,0.78,0.65]; // Example safety indices
+
+for(let i=0;i<TURB_C;i++)tur.push({id:`WT_${String(i+1).padStart(2,'0')}`,power:2.8,avail:true,safety:safetyIdx[i],curtailed:false,stopped:false,hotStandby:false});
+
+let mode='A';
+function setMode(m){mode=m;document.querySelectorAll('#mode-btns .mode-btn').forEach(b=>b.classList.toggle('sel',b.dataset.mode===m));S.curtMode=m}
+
+function windCurve(ws){if(ws<3)return 0;if(ws>=12)return TURB_R;const r=(ws-3)/(12-3);return TURB_R*r*r*r}
+
+function step(){
+  S.cycle++;
+  const ws=S.wind;const mppt=windCurve(ws);
+  let availTotal=mppt*TURB_C;
+  S.curtailRatio=S.plan<availTotal*0.5?0.6:S.plan/availTotal;
+  let total=0;
+
+  tur.forEach((t,i)=>{
+    t.avail=t.safety>0.2;
+    if(!t.avail){t.power=0;t.curtailed=false;t.stopped=true;t.hotStandby=false;return}
+    const targetMppt=mppt;
+    if(mode==='A'){// Uniform curtailment
+      t.power=S.plan/TURB_C;t.curtailed=t.power<targetMppt*0.9;t.stopped=false;t.hotStandby=false;
+    }else if(mode==='B'){// Part running: some stop, others at MPPT
+      const need=TURB_C*S.plan/availTotal;const runCnt=Math.max(1,Math.round(need));
+      if(i<runCnt){t.power=Math.min(TURB_R,availTotal/runCnt);t.curtailed=false;t.stopped=false;t.hotStandby=false}
+      else{t.power=0;t.curtailed=false;t.stopped=true;t.hotStandby=false}
+    }else{// Mode C: rotor energy storage
+      if(t.safety>0.7){t.power=targetMppt*0.8;t.curtailed=true;t.hotStandby=true;t.stopped=false}
+      else{t.power=S.plan/(TURB_C*0.6);t.curtailed=true;t.stopped=false;t.hotStandby=false}
+    }
+    t.power=Math.max(0,Math.min(TURB_R,t.power));total+=t.power;
+  });
+
+  const resUp=availTotal-total;const resDn=total-S.plan;
+  const hotSB=tur.filter(t=>t.hotStandby).length;
+
+  document.getElementById('curt-ratio').textContent=(S.curtailRatio*100).toFixed(0)+'%';
+  document.getElementById('curt-fill').style.width=(S.curtailRatio*100)+'%';
+  document.getElementById('res-up').textContent=resUp.toFixed(1);
+  document.getElementById('res-dn').textContent=Math.max(0,resDn).toFixed(1);
+  document.getElementById('hot-sp').textContent=hotSB;
+  document.getElementById('avail-pow').textContent=availTotal.toFixed(1);
+  document.getElementById('curt-pow').textContent=total.toFixed(1);
+
+  document.getElementById('kpi-row').innerHTML=[
+    {l:'计划功率',v:S.plan.toFixed(0),s:'MW',c:'var(--blue)'},
+    {l:'实际功率',v:total.toFixed(1),s:'MW',c:'var(--magenta)'},
+    {l:'可用功率',v:availTotal.toFixed(1),s:'MW',c:'var(--yellow)'},
+    {l:'限电比',v:(S.curtailRatio*100).toFixed(0),s:'%',c:'var(--magenta)'},
+    {l:'限电模式',v:mode==='A'?'UNIFORM':mode==='B'?'PART RUN':'ROTOR',s:'',c:'var(--magenta)'},
+    {l:'周期',v:S.cycle,s:'',c:'var(--text-dim)'},
+  ].map(k=>`<div class="kpi warn"><div class="kl">${k.l}</div><div class="kv" style="color:${k.c};font-size:18px">${k.v}</div><div class="ks">${k.s}</div></div>`).join('');
+
+  const tg=document.getElementById('turbine-grid');
+  tg.innerHTML=tur.map(t=>{const pct=t.power/TURB_R*100;let col='var(--green)';if(t.stopped)col='var(--text-dim)';else if(t.curtailed)col='var(--magenta)';else if(t.hotStandby)col='var(--yellow)';const cls=t.curtailed?'curtailed':'';return`<div class="turbine-cell ${cls}"><div class="tid">💨 ${t.id}</div><div class="tp" style="color:${col}">${t.power.toFixed(1)} MW</div><div class="td">S=${t.safety.toFixed(2)} | ${t.stopped?'STOPPED':t.hotStandby?'HOT STBY':t.curtailed?'CURTAILED':'MPPT'}</div></div>`}).join('');
+  let fc=0,cc=0,sc=0,hc=0;
+  tur.forEach(t=>{if(t.stopped)sc++;else if(t.hotStandby)hc++;else if(t.curtailed)cc++;else fc++});
+  document.getElementById('full-cnt').textContent=fc;
+  document.getElementById('curt-cnt').textContent=cc;
+  document.getElementById('stop-cnt').textContent=sc;
+  document.getElementById('hs-cnt').textContent=hc;
+}
+setInterval(step,1000);step();
+window.setMode=setMode;
+</script>
+</body>
+</html>

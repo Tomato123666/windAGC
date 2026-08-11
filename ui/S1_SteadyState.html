@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S1 稳态计划跟踪 — Wind-AGC</title>
+<style>
+:root{
+  --bg-primary:#080c12;--bg-secondary:#0f161f;--bg-panel:#131c28;
+  --bg-card:#182230;--bg-input:#0c141e;
+  --border:#1e3048;--border-active:#2a4a6e;
+  --text-primary:#d0d8e4;--text-secondary:#8899b0;--text-dim:#5a6d85;
+  --cyan:#00d4c8;--green:#00e676;--yellow:#ffb74d;
+  --orange:#ff9100;--red:#ff3d3d;--blue:#448aff;--magenta:#e040fb;
+  --text-bright:#e8f0ff;
+  --font-mono:'Cascadia Code','JetBrains Mono','Consolas',monospace;
+  --font-ui:'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  --radius:3px;--radius-lg:6px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:15px}
+#app{display:flex;flex-direction:column;height:100vh;padding:4px;gap:4px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg-secondary)}
+::-webkit-scrollbar-thumb{background:var(--border-active);border-radius:3px}
+
+.header{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-lg);flex-shrink:0}
+.header h1{font-size:18px;font-weight:700;color:var(--green);letter-spacing:1px}
+.header .links{display:flex;gap:10px}
+.header .links a{color:var(--blue);text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid var(--border-active);border-radius:var(--radius);transition:all .25s}
+.header .links a:hover{background:var(--border-active);color:var(--text-bright)}
+.scene-badge{background:#0a2a0a;color:var(--green);border:1px solid var(--green);padding:3px 12px;border-radius:12px;font-size:14px;font-weight:700;letter-spacing:1px}
+
+.kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;flex-shrink:0}
+.kpi{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;text-align:center}
+.kpi .kl{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.kpi .kv{font-family:var(--font-mono);font-size:26px;font-weight:700;line-height:1.1}
+.kpi .ks{font-size:10px;color:var(--text-dim)}
+
+.main{display:grid;grid-template-columns:1fr 1fr;gap:4px;flex:1;min-height:0}
+.panel{background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column}
+.panel-hd{padding:6px 10px;background:var(--bg-secondary);border-bottom:1px solid var(--border);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-secondary)}
+.panel-bd{flex:1;overflow-y:auto;padding:8px}
+
+.flow-row{display:flex;align-items:center;justify-content:space-around;padding:12px 0}
+.flow-node{text-align:center;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);min-width:70px}
+.flow-node .ft{font-size:10px;color:var(--text-dim);text-transform:uppercase}
+.flow-node .fv{font-family:var(--font-mono);font-size:22px;font-weight:700}
+.flow-arrow{font-size:24px;font-weight:700;color:var(--green)}
+.flow-line{flex:1;height:2px;background:var(--green);margin:0 8px}
+
+.turbine-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-top:6px}
+.turbine-cell{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:5px;text-align:center;font-size:10px}
+.turbine-cell .tid{color:var(--text-dim);font-size:9px}
+.turbine-cell .tp{font-family:var(--font-mono);font-size:12px;font-weight:700}
+.turbine-cell .tw{font-size:9px;color:var(--text-dim)}
+
+.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:6px}
+.metric{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:8px;text-align:center}
+.metric .ml{font-size:10px;color:var(--text-dim)}
+.metric .mv{font-family:var(--font-mono);font-size:18px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h1>🟢 S1 稳态 — 计划跟踪与经济调度</h1>
+      <span class="scene-badge">PRIORITY 0</span>
+    </div>
+    <div class="links">
+      <a href="../WindAGC_UI.html">🏠 主仪表盘</a>
+      <a href="S2_WindDisturbance.html">S2 ▸</a>
+    </div>
+  </div>
+  <div class="kpi-row" id="kpi-row"></div>
+  <div class="main">
+    <div class="panel">
+      <div class="panel-hd">⚡ 功率流向图 — 稳态跟踪</div>
+      <div class="panel-bd">
+        <div class="flow-row">
+          <div class="flow-node"><div class="ft">🌬 风资源</div><div class="fv" style="color:var(--cyan)" id="f-wind">8.0</div><div style="font-size:9px;color:var(--text-dim)">m/s</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><div class="ft">💨 风电场</div><div class="fv" style="color:var(--yellow)" id="f-farm">0</div><div style="font-size:9px;color:var(--text-dim)">MW</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><div class="ft">🔌 PCC</div><div class="fv" style="color:var(--cyan)" id="f-pcc">0</div><div style="font-size:9px;color:var(--text-dim)">MW</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><div class="ft">🏭 电网</div><div class="fv" style="color:var(--text-bright)" id="f-grid">0</div><div style="font-size:9px;color:var(--text-dim)">MW</div></div>
+        </div>
+        <div style="text-align:center;font-family:var(--font-mono);font-size:13px;margin-top:8px;color:var(--green)" id="f-balance">ΔP = 0.0 MW — 供需平衡 ✅</div>
+        <div class="metric-grid">
+          <div class="metric"><div class="ml">跟踪误差 MAE</div><div class="mv" style="color:var(--green)" id="m-mae">0.00</div><div style="font-size:9px;color:var(--text-dim)">MW</div></div>
+          <div class="metric"><div class="ml">跟踪误差 RMSE</div><div class="mv" style="color:var(--green)" id="m-rmse">0.00</div><div style="font-size:9px;color:var(--text-dim)">MW</div></div>
+          <div class="metric"><div class="ml">合格率</div><div class="mv" style="color:var(--green)" id="m-qr">100.0</div><div style="font-size:9px;color:var(--text-dim)">%</div></div>
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-dim);line-height:1.6;padding:8px;background:var(--bg-card);border-radius:var(--radius)">
+          <b style="color:var(--green)">S1 场景说明</b><br>
+          风电 AGC 的默认运行模式。系统根据调度中心下发的功率计划，<br>
+          将总功率指令经济分配到各台风机，维持全场功率跟踪调度计划。<br>
+          采用 PID + 前馈控制，KP=1.2, KI=0.05, α=0.75（前馈系数）。<br>
+          爬坡率限制 10% Pn/min，合格率目标 ≥ 95%，RMSE ≤ 2%。
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-hd">💨 风机阵列 — 功率分配</div>
+      <div class="panel-bd">
+        <div style="font-size:10px;color:var(--text-dim)">单台额定: 3MW × 10台 = 30MW | 控制模式: STEADY_STATE</div>
+        <div class="turbine-grid" id="turbine-grid"></div>
+        <div style="margin-top:6px;display:flex;gap:6px;font-size:10px;color:var(--text-dim)">
+          <span>🟢 基荷机组:</span><b id="base-cnt" style="color:var(--green)">8</b>
+          <span>🔵 调节机组:</span><b id="reg-cnt" style="color:var(--cyan)">2</b>
+          <span>平均功率:</span><b id="avg-pow" style="color:var(--yellow)">1.5</b> MW/台
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+// S1 Steady State simulation
+const CAP=30,TURB_C=10,TURB_R=3,WIND_RATED=12,WIND_CUTIN=3;
+const S={wind:8,freq:50,volt:1,plan:15,cycle:0};
+const tur=[];
+for(let i=0;i<TURB_C;i++)tur.push({id:`WT_${String(i+1).padStart(2,'0')}`,power:1.5,target:0,wind:8,role:'BASE'});
+
+function windCurve(ws){if(ws<WIND_CUTIN)return 0;if(ws>=WIND_RATED)return TURB_R;const r=(ws-WIND_CUTIN)/(WIND_RATED-WIND_CUTIN);return TURB_R*r*r*r}
+
+let errHist=[];
+function step(){
+  S.cycle++;
+  S.freq=50+(Math.sin(S.cycle*0.03)*0.02);
+  // Distribute plan power across turbines (economic dispatch)
+  const mpptPerTurbine=windCurve(S.wind);
+  const available=Math.min(mpptPerTurbine*TURB_C,CAP);
+  const targetPerTurbine=Math.min(TURB_R,S.plan/TURB_C);
+  let total=0;
+  tur.forEach((t,i)=>{
+    t.wind=S.wind*(0.9+Math.sin(S.cycle*0.15+i)*0.1);
+    const mppt=windCurve(t.wind);
+    t.target=Math.min(targetPerTurbine,mppt);
+    t.power+=0.3*(t.target-t.power);
+    t.power=Math.max(0,Math.min(TURB_R,t.power));
+    t.role=t.power>2?'REGULATING':'BASE';
+    total+=t.power;
+  });
+  const err=total-S.plan;
+  errHist.push(Math.abs(err));if(errHist.length>300)errHist.shift();
+  const mae=errHist.reduce((s,e)=>s+e,0)/errHist.length||0;
+  const rmse=Math.sqrt(errHist.reduce((s,e)=>s+e*e,0)/errHist.length||0);
+  const qr=(errHist.filter(e=>Math.abs(e)<1).length/errHist.length)*100;
+  render(total,mae,rmse,qr,err);
+}
+function render(total,mae,rmse,qr,err){
+  document.getElementById('f-farm').textContent=total.toFixed(1);
+  document.getElementById('f-pcc').textContent=total.toFixed(1);
+  document.getElementById('f-grid').textContent=total.toFixed(1);
+  document.getElementById('f-wind').textContent=S.wind.toFixed(1);
+  document.getElementById('f-balance').textContent=`ΔP = ${err>=0?'+':''}${err.toFixed(1)} MW — ${Math.abs(err)<.5?'供需平衡 ✅':'⚠ 跟踪偏差!'}`;
+  document.getElementById('f-balance').style.color=Math.abs(err)<.5?'var(--green)':'var(--yellow)';
+  document.getElementById('m-mae').textContent=mae.toFixed(2);
+  document.getElementById('m-rmse').textContent=rmse.toFixed(2);
+  document.getElementById('m-qr').textContent=qr.toFixed(1);
+  const tg=document.getElementById('turbine-grid');
+  tg.innerHTML=tur.map(t=>{const pct=t.power/TURB_R*100;const col=pct>80?'var(--green)':pct>40?'var(--yellow)':'var(--orange)';return`<div class="turbine-cell"><div class="tid">💨 ${t.id}</div><div class="tp" style="color:${col}">${t.power.toFixed(1)} MW</div><div class="tw">${pct.toFixed(0)}% | ${t.wind.toFixed(0)}m/s | ${t.role}</div></div>`}).join('');
+  let bc=0,rc=0;tur.forEach(t=>{if(t.role==='BASE')bc++;else rc++});
+  document.getElementById('base-cnt').textContent=bc;document.getElementById('reg-cnt').textContent=rc;
+  document.getElementById('avg-pow').textContent=(total/TURB_C).toFixed(1);
+  // KPIs
+  document.getElementById('kpi-row').innerHTML=[
+    {l:'频率',v:S.freq.toFixed(2),s:'Hz',c:'var(--cyan)'},
+    {l:'风速',v:S.wind.toFixed(1),s:'m/s',c:'var(--cyan)'},
+    {l:'计划功率',v:S.plan.toFixed(0),s:'MW',c:'var(--blue)'},
+    {l:'实际功率',v:total.toFixed(1),s:'MW',c:'var(--yellow)'},
+    {l:'跟踪误差',v:err.toFixed(1),s:'MW',c:Math.abs(err)<.5?'var(--green)':'var(--yellow)'},
+    {l:'周期',v:S.cycle,s:'',c:'var(--text-dim)'},
+  ].map(k=>`<div class="kpi"><div class="kl">${k.l}</div><div class="kv" style="color:${k.c};font-size:22px">${k.v}</div><div class="ks">${k.s}</div></div>`).join('');
+}
+setInterval(step,1000);step();
+</script>
+</body>
+</html>

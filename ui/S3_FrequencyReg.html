@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S3 一次调频 — Wind-AGC</title>
+<style>
+:root{
+  --bg-primary:#080c12;--bg-secondary:#0f161f;--bg-panel:#131c28;
+  --bg-card:#182230;--bg-input:#0c141e;
+  --border:#1e3048;--border-active:#2a4a6e;
+  --text-primary:#d0d8e4;--text-secondary:#8899b0;--text-dim:#5a6d85;
+  --cyan:#00d4c8;--green:#00e676;--yellow:#ffb74d;
+  --orange:#ff9100;--red:#ff3d3d;--blue:#448aff;--magenta:#e040fb;
+  --text-bright:#e8f0ff;
+  --font-mono:'Cascadia Code','JetBrains Mono','Consolas',monospace;
+  --font-ui:'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  --radius:3px;--radius-lg:6px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--bg-primary);color:var(--text-primary);font-family:var(--font-ui);font-size:15px}
+#app{display:flex;flex-direction:column;height:100vh;padding:4px;gap:4px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg-secondary)}
+::-webkit-scrollbar-thumb{background:var(--border-active);border-radius:3px}
+.header{display:flex;align-items:center;justify-content:space-between;padding:6px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-lg);flex-shrink:0}
+.header h1{font-size:18px;font-weight:700;color:var(--blue);letter-spacing:1px}
+.header .links{display:flex;gap:10px}
+.header .links a{color:var(--blue);text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid var(--border-active);border-radius:var(--radius);transition:all .25s}
+.header .links a:hover{background:var(--border-active);color:var(--text-bright)}
+.scene-badge{background:#0a1a2a;color:var(--blue);border:1px solid var(--blue);padding:3px 12px;border-radius:12px;font-size:14px;font-weight:700;letter-spacing:1px}
+.kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;flex-shrink:0}
+.kpi{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;text-align:center}
+.kpi .kl{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px}
+.kpi .kv{font-family:var(--font-mono);font-size:26px;font-weight:700;line-height:1.1}
+.kpi .ks{font-size:10px;color:var(--text-dim)}
+.kpi.alarm{border-color:var(--red);animation:pulse .8s infinite}
+@keyframes pulse{0%,100%{border-color:var(--red)}50%{border-color:transparent}}
+
+.main{display:grid;grid-template-columns:1fr 1fr;gap:4px;flex:1;min-height:0}
+.panel{background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column}
+.panel-hd{padding:6px 10px;background:var(--bg-secondary);border-bottom:1px solid var(--border);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1.2px;color:var(--text-secondary)}
+.panel-bd{flex:1;overflow-y:auto;padding:8px}
+
+.freq-gauge{text-align:center;padding:10px}
+.freq-gauge .fg-val{font-family:var(--font-mono);font-size:64px;font-weight:800;line-height:1}
+.freq-gauge .fg-delta{font-family:var(--font-mono);font-size:20px;font-weight:700;margin:4px 0}
+.freq-gauge .fg-label{font-size:12px;color:var(--text-dim)}
+.freq-bar{height:8px;background:var(--bg-input);border-radius:4px;margin:8px 0;overflow:hidden;position:relative}
+.freq-bar .fz{position:absolute;width:2px;height:100%;background:var(--text-bright);left:50%}
+.freq-bar .fdb-h{position:absolute;height:100%;border-left:1px dashed var(--orange);border-right:1px dashed var(--orange)}
+.freq-bar .fb-fill{height:100%;border-radius:4px;transition:all .5s}
+
+.fr-box{padding:8px;background:var(--bg-card);border-radius:var(--radius);margin:4px 0;text-align:center;font-size:14px;font-weight:700}
+.droop-curve{background:var(--bg-card);border-radius:var(--radius);padding:10px;margin:4px 0;text-align:center}
+.droop-curve .dc-slope{font-family:var(--font-mono);font-size:28px;font-weight:800;margin:4px 0}
+.turbine-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+.turbine-cell{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:5px;text-align:center;font-size:10px}
+.turbine-cell .tid{color:var(--text-dim);font-size:9px}
+.turbine-cell .tp{font-family:var(--font-mono);font-size:12px;font-weight:700}
+.turbine-cell .td{font-size:9px;color:var(--text-dim)}
+.turbine-cell.fr-up{border-color:var(--green);background:rgba(0,230,118,.08)}
+.turbine-cell.fr-dn{border-color:var(--orange);background:rgba(255,145,0,.08)}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:10px">
+      <h1>🔷 S3 一次调频 — 频率响应 PFR</h1>
+      <span class="scene-badge">PRIORITY 85</span>
+    </div>
+    <div class="links">
+      <a href="../WindAGC_UI.html">🏠 主仪表盘</a>
+      <a href="S2_WindDisturbance.html">◂ S2</a>
+      <a href="S4_RampTracking.html">S4 ▸</a>
+    </div>
+  </div>
+  <div class="kpi-row" id="kpi-row"></div>
+  <div class="main">
+    <div class="panel">
+      <div class="panel-hd">📉 电网频率 — Droop 特性曲线</div>
+      <div class="panel-bd">
+        <div class="freq-gauge">
+          <div class="fg-val" id="freq-val">50.00</div>
+          <div class="fg-label" style="color:var(--text-dim)">Hz (额定 50.00)</div>
+          <div class="fg-delta" id="freq-delta" style="color:var(--green)">Δf = 0.00 Hz</div>
+          <div style="font-size:11px;color:var(--text-dim);margin:4px 0">ROCOF: <b id="freq-rocof" style="color:var(--cyan)">0.000</b> Hz/s</div>
+        </div>
+        <div class="freq-bar" id="freq-bar"><div class="fz"></div><div class="fdb-h" id="fdb-zone"></div><div class="fb-fill" id="fb-fill"></div></div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-dim);margin-top:2px"><span>49.0</span><span>49.5</span><span style="color:var(--orange)">49.9</span><span style="color:var(--text-bright)">50.0</span><span style="color:var(--orange)">50.1</span><span>50.5</span><span>51.0</span></div>
+        <div class="fr-box" id="fr-status" style="color:var(--green)">🟢 READY — 频差在死区内</div>
+        <div class="droop-curve">
+          <div style="font-size:10px;color:var(--text-dim)">Droop 特性: ΔP = -(Pn/fn) × Δf / (Droop/100)</div>
+          <div class="dc-slide" style="display:flex;gap:10px;justify-content:center;align-items:center;margin:6px 0">
+            <div style="font-family:var(--font-mono);font-size:14px;color:var(--cyan)">Δf = <b id="dc-df">0.00</b> Hz</div>
+            <div style="font-size:20px;color:var(--blue)">→</div>
+            <div style="font-family:var(--font-mono);font-size:14px;color:var(--yellow)">ΔP = <b id="dc-dp">0.0</b> MW</div>
+          </div>
+          <div style="font-size:9px;color:var(--text-dim)">Droop = 4% | Deadband = ±0.10 Hz | Pmax = 10%×30MW = 3MW</div>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);line-height:1.6;padding:8px;background:var(--bg-card);border-radius:var(--radius);margin-top:6px">
+          <b style="color:var(--blue)">S3 触发条件</b><br>
+          频率偏差 > 死区 ±0.10 Hz → FRState: READY→ACTIVE<br>
+          调频增量: ΔP = -(Pn/fn) × Δf / droop, 限幅 ±3MW (10%Pn)<br>
+          恢复阈值: |Δf| < 0.02 Hz → RECOVERY → READY<br>
+          KPI: 频率恢复至 50±0.05 Hz 时间 < 30s
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-hd">💨 风机调频响应 — 功率增量分配</div>
+      <div class="panel-bd">
+        <div style="font-size:10px;color:var(--text-dim)">调频增量需求: <b id="fr-demand" style="color:var(--yellow)">0.0</b> MW | 容量限幅: ±3MW</div>
+        <div class="turbine-grid" id="turbine-grid"></div>
+        <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <div class="turbine-cell">
+            <div style="font-size:10px;color:var(--text-dim)">FR 状态机</div>
+            <div style="font-family:var(--font-mono);font-size:18px;font-weight:700" id="fr-sm">READY</div>
+            <div style="font-size:9px;color:var(--text-dim)">READY→ACTIVE→RECOVERY</div>
+          </div>
+          <div class="turbine-cell">
+            <div style="font-size:10px;color:var(--text-dim)">恢复计时</div>
+            <div style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--cyan)" id="fr-recovery">0</div>
+            <div style="font-size:9px;color:var(--text-dim)">秒 (目标 <30s)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const TURB_C=10,TURB_R=3,CAP=30,F0=50,FR_DB=0.10,FR_DP=4.0,FR_RECOVER=0.02,FR_MAX=CAP*0.1;
+const S={freq:50,freqPrev:50,rocof:0,plan:15,cycle:0,frState:'READY',frRecoveryTime:0,wind:8};
+const tur=[];
+let freqHist=[];
+for(let i=0;i<TURB_C;i++)tur.push({id:`WT_${String(i+1).padStart(2,'0')}`,power:1.5,base:1.5,fr:0});
+
+function step(){
+  S.cycle++;S.freqPrev=S.freq;
+  // Frequency events
+  if(S.cycle===10){S.freq=49.75;S.rocof=-.25}  // Low freq event
+  if(S.cycle>10&&S.cycle<30){S.freq+=0.02;if(S.freq>49.95&&S.freq<50.05)S.freq=50}
+  S.rocof=(S.freq-S.freqPrev)*10;
+  freqHist.push(S.freq);if(freqHist.length>300)freqHist.shift();
+  // Frequency regulation logic
+  const df=S.freq-F0;
+  let frState='READY',frDemand=0;
+  if(Math.abs(df)>FR_DB){frState='ACTIVE';frDemand=-(CAP/F0)*df/(FR_DP/100);frDemand=Math.max(-FR_MAX,Math.min(FR_MAX,frDemand))}
+  else if(S.frState==='ACTIVE'||S.frState==='RECOVERY'){frState=Math.abs(df)<FR_RECOVER?'RECOVERY':'ACTIVE';frDemand=-(CAP/F0)*df/(FR_DP/100);frDemand=Math.max(-FR_MAX,Math.min(FR_MAX,frDemand))}
+  if(frState==='READY'){S.frRecoveryTime=0;frDemand=0}else if(frState==='RECOVERY')S.frRecoveryTime++;else S.frRecoveryTime=0;
+  S.frState=frState;
+  // Turbine allocation
+  let total=0;
+  tur.forEach((t,i)=>{
+    const mppt=3;
+    t.base=mppt;
+    const pe=(frDemand/TURB_C);
+    t.fr+=0.3*(pe-t.fr);
+    t.fr=Math.max(-TURB_R*0.5,Math.min(TURB_R*0.5,t.fr));
+    t.power=Math.max(0,Math.min(TURB_R,t.base+t.fr));
+    total+=t.power;
+  });
+  render(total,df,frDemand);
+}
+function render(total,df,frDemand){
+  const fdAbs=Math.abs(df);
+  const freqColor=fdAbs>FR_DB?'var(--red)':fdAbs>FR_RECOVER?'var(--orange)':'var(--green)';
+  document.getElementById('freq-val').textContent=S.freq.toFixed(2);
+  document.getElementById('freq-val').style.color=freqColor;
+  document.getElementById('freq-delta').textContent=`Δf = ${df>=0?'+':''}${df.toFixed(2)} Hz`;
+  document.getElementById('freq-delta').style.color=freqColor;
+  document.getElementById('freq-rocof').textContent=S.rocof.toFixed(3);
+  // Frequency bar
+  const fp=((S.freq-49)/2)*100;document.getElementById('fb-fill').style.width=fp+'%';
+  document.getElementById('fb-fill').style.background=fdAbs>FR_DB?'var(--red)':fdAbs>FR_RECOVER?'var(--yellow)':'var(--green)';
+  const dbLeft=((49.9-49)/2)*100,dbRight=((50.1-49)/2)*100;
+  document.getElementById('fdb-zone').style.left=dbLeft+'%';
+  document.getElementById('fdb-zone').style.width=(dbRight-dbLeft)+'%';
+  document.getElementById('fdb-zone').style.background='rgba(255,145,0,.1)';
+  // FR status
+  const fss=document.getElementById('fr-status');
+  if(S.frState==='ACTIVE'){fss.textContent='🔴 ACTIVE — 调频中';fss.style.color='var(--red)';fss.style.background='#2a0a0a'}
+  else if(S.frState==='RECOVERY'){fss.textContent='🟡 RECOVERY — 功率恢复中';fss.style.color='var(--yellow)';fss.style.background='rgba(255,183,77,.1)'}
+  else{fss.textContent='🟢 READY — 频差在死区内';fss.style.color='var(--green)';fss.style.background='var(--bg-card)'}
+  document.getElementById('dc-df').textContent=df.toFixed(2);
+  document.getElementById('dc-dp').textContent=(frDemand>=0?'+':'')+frDemand.toFixed(1);
+  document.getElementById('fr-demand').textContent=(frDemand>=0?'+':'')+frDemand.toFixed(1);
+  document.getElementById('fr-sm').textContent=S.frState;
+  document.getElementById('fr-recovery').textContent=S.frRecoveryTime;
+  // Turbine grid
+  const tg=document.getElementById('turbine-grid');
+  tg.innerHTML=tur.map(t=>{const pct=t.power/TURB_R*100;const col=pct>80?'var(--green)':pct>40?'var(--yellow)':'var(--orange)';const cls=t.fr>0.1?'fr-up':t.fr<-0.1?'fr-dn':'';return`<div class="turbine-cell ${cls}"><div class="tid">💨 ${t.id}</div><div class="tp" style="color:${col}">${t.power.toFixed(1)} MW</div><div class="td">基值${t.base.toFixed(1)} | FR ${t.fr>=0?'+':''}${t.fr.toFixed(1)}</div></div>`}).join('');
+  document.getElementById('kpi-row').innerHTML=[
+    {l:'频率',v:S.freq.toFixed(2),s:'Hz',c:freqColor},
+    {l:'频率偏差',v:(df>=0?'+':'')+df.toFixed(2),s:'Hz',c:freqColor},
+    {l:'ROCOF',v:S.rocof.toFixed(3),s:'Hz/s',c:Math.abs(S.rocof)>.1?'var(--orange)':'var(--cyan)'},
+    {l:'FR需求',v:(frDemand>=0?'+':'')+frDemand.toFixed(1),s:'MW',c:'var(--yellow)'},
+    {l:'FR状态',v:S.frState,s:'',c:S.frState==='ACTIVE'?'var(--red)':S.frState==='RECOVERY'?'var(--yellow)':'var(--green)'},
+    {l:'功率',v:total.toFixed(1),s:'MW',c:'var(--yellow)'},
+  ].map(k=>`<div class="kpi"><div class="kl">${k.l}</div><div class="kv" style="color:${k.c};font-size:18px">${k.v}</div><div class="ks">${k.s}</div></div>`).join('');
+}
+setInterval(step,1000);step();
+</script>
+</body>
+</html>
