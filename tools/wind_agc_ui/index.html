@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wind-AGC 风电场实时监控面板</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>💨</text></svg>">
+<script src="vendor/vue.global.prod.js"></script>
+<script src="vendor/echarts.min.js"></script>
+<script src="vendor/socket.io.min.js"></script>
+<style>
+:root{
+  --bg:#080c12;--bg2:#0f161f;--bg3:#131c28;--card:#182230;--card2:#162837;
+  --bd:#1e3048;--bda:#2a4a6e;--bhl:#3a7bd5;
+  --t1:#d0d8e4;--t2:#8899b0;--t3:#5a6d85;--tb:#e8f0f8;
+  --cy:#00d4c8;--gn:#00e676;--yl:#ffb74d;--or:#ff9100;--rd:#ff3d3d;--bl:#448aff;--mg:#e040fb;
+  --fm:'Cascadia Code','JetBrains Mono','Consolas',monospace;
+  --ui:'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  --r:3px;--rl:6px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--t1);font-family:var(--ui);font-size:13px;overflow:hidden}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--bg2)}
+::-webkit-scrollbar-thumb{background:#2a4358;border-radius:3px}
+#app{display:flex;height:100vh}
+
+.sidebar{width:160px;min-width:160px;background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column}
+.sidebar-title{padding:12px 10px;font-size:14px;font-weight:700;color:var(--cy);border-bottom:1px solid var(--bd);line-height:1.4;text-align:center}
+.sidebar-title small{display:block;font-size:9px;color:var(--t3);font-weight:400;margin-top:2px}
+.side-nav{flex:1;overflow-y:auto;padding:6px}
+.nav-btn{display:block;width:100%;text-align:left;padding:7px 8px;margin:1px 0;border:0;border-radius:var(--rl);background:transparent;color:var(--t3);cursor:pointer;font-size:11px;transition:all .15s}
+.nav-btn:hover{background:var(--card);color:var(--t1)}
+.nav-btn.active{background:rgba(0,212,200,.12);color:var(--cy)}
+.nav-btn .no{display:inline-block;width:22px;color:inherit;font-weight:700;font-size:11px}
+.nav-group{font-size:9px;color:#546e7a;padding:8px 8px 3px;letter-spacing:1px}
+.sidebar-foot{padding:6px 10px;font-size:9px;color:#546e7a;border-top:1px solid var(--bd);text-align:center}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:3px}
+.dot.on{background:var(--gn);box-shadow:0 0 5px var(--gn)}
+.dot.off{background:var(--rd);box-shadow:0 0 5px var(--rd)}
+
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{display:flex;align-items:center;gap:12px;padding:8px 12px;background:var(--bg2);border-bottom:1px solid var(--bd);flex-shrink:0}
+.topbar .page-title{font-size:14px;font-weight:700;color:var(--tb)}
+.topbar .spacer{flex:1}
+.topbar .st{font-size:11px;color:var(--t3);display:flex;align-items:center;gap:4px}
+.scene-badge{padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700}
+.scene-badge.s1{background:rgba(0,230,118,.14);color:var(--gn);border:1px solid var(--gn)}
+.scene-badge.s2{background:rgba(0,212,200,.14);color:var(--cy);border:1px solid var(--cy)}
+.scene-badge.s3{background:rgba(68,138,255,.14);color:var(--bl);border:1px solid var(--bl)}
+.scene-badge.s4{background:rgba(255,145,0,.14);color:var(--or);border:1px solid var(--or)}
+.scene-badge.s5{background:rgba(224,64,251,.14);color:var(--mg);border:1px solid var(--mg)}
+.scene-badge.s6{background:rgba(255,61,61,.2);color:var(--rd);border:1px solid var(--rd);animation:pulse-badge .6s infinite}
+
+.content{flex:1;overflow-y:auto;padding:10px}
+
+.card{background:var(--card);border:1px solid var(--bd);border-radius:var(--rl);padding:12px;margin-bottom:8px}
+.card-title{font-size:12px;font-weight:700;margin-bottom:10px;color:var(--t1);display:flex;align-items:center;gap:6px}
+.card-title .hint{font-size:10px;color:var(--t3);font-weight:400}
+.grid{display:grid;gap:6px}
+.grid2{grid-template-columns:1fr 1fr}
+.grid3{grid-template-columns:repeat(3,1fr)}
+.grid4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:1200px){.grid4{grid-template-columns:repeat(2,1fr)}}
+
+.kpi-row{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;margin-bottom:6px}
+.kpi{background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:7px 8px;text-align:center}
+.kpi .label{font-size:9px;color:var(--t3);margin-bottom:3px;letter-spacing:.5px}
+.kpi .value{font-family:var(--fm);font-size:20px;font-weight:700;line-height:1.1}
+.kpi .sub{font-size:9px;color:var(--t3);margin-top:2px}
+.kpi.alarm{border-color:var(--rd);animation:pulse-border .8s infinite}
+.kpi.warn{border-color:var(--yl)}
+@keyframes pulse-border{0%,100%{border-color:var(--rd)}50%{border-color:transparent}}
+
+.chart-box{width:100%;height:240px}
+.chart-box.tall{height:300px}
+.chart-box.small{height:180px}
+
+.fleet-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+.unit-tile{background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:7px;text-align:center;transition:all .3s}
+.unit-tile .u-name{font-size:10px;color:var(--t3);display:flex;justify-content:space-between;align-items:center}
+.unit-tile .u-st{padding:1px 5px;border-radius:4px;font-size:8px}
+.unit-tile .u-st.run{background:rgba(0,230,118,.15);color:var(--gn)}
+.unit-tile .u-st.lim{background:rgba(255,145,0,.15);color:var(--or)}
+.unit-tile .u-st.off{background:rgba(255,61,61,.15);color:var(--rd)}
+.unit-tile .u-value{font-family:var(--fm);font-size:16px;font-weight:700;margin:4px 0}
+.unit-tile .u-sub{font-size:9px;color:var(--t3);line-height:1.4}
+.unit-tile .u-bar{height:4px;background:#0f1a26;border-radius:2px;overflow:hidden;margin-top:4px}
+.unit-tile .u-bar-fill{height:100%;border-radius:2px;transition:width .3s}
+.unit-tile.gust{border-color:var(--or);background:rgba(255,145,0,.06)}
+.unit-tile.fr-up{border-color:var(--gn);background:rgba(0,230,118,.04)}
+.unit-tile.fr-dn{border-color:var(--or);background:rgba(255,145,0,.04)}
+.unit-tile.curtailed{border-color:var(--mg);background:rgba(224,64,251,.04)}
+.unit-tile.off{border-color:var(--rd);opacity:.6}
+
+.scene-hero{background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:12px;margin-bottom:8px}
+.scene-hero .sh-title{font-size:16px;font-weight:700;margin-bottom:8px}
+.scene-hero .sh-desc{font-size:11px;color:var(--t3);line-height:1.6}
+.scene-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:8px}
+@media(max-width:1000px){.scene-metrics{grid-template-columns:repeat(2,1fr)}}
+.scene-metric{background:var(--card);border:1px solid var(--bd);border-radius:var(--rl);padding:8px}
+.scene-metric .label{font-size:10px;color:var(--t3)}
+.scene-metric .value{font-family:var(--fm);font-size:18px;font-weight:700;margin-top:3px}
+.scene-metric .sub{font-size:9px;color:var(--t3);margin-top:2px}
+
+.scene-log{margin-top:8px;max-height:130px;overflow-y:auto;font-size:10px;font-family:Consolas,monospace}
+.scene-log .entry{padding:2px 0;border-bottom:1px dashed var(--bd)}
+.scene-log .time{color:#546e7a;margin-right:6px}
+.scene-log .hl{color:var(--cy)}
+
+.alert-item{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:var(--rl);margin-bottom:4px;font-size:11px}
+.alert-crit{background:rgba(244,67,54,.1);color:#ff8a80;border:1px solid rgba(244,67,54,.25)}
+.alert-warn{background:rgba(255,152,0,.08);color:#ffcc80;border:1px solid rgba(255,152,0,.2)}
+.alert-none{color:var(--gn);font-size:11px;padding:6px 0}
+
+.flow-svg{width:100%;height:auto}
+.topo-flow{stroke-dasharray:6 4;animation:topoAnim .8s linear infinite}
+@keyframes topoAnim{to{stroke-dashoffset:-10}}
+
+.ctrl-section{background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:10px;margin-bottom:8px}
+.ctrl-section .cs-title{font-size:11px;font-weight:700;color:var(--cy);margin-bottom:8px}
+.ctrl-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+.btn{padding:6px 12px;border:0;border-radius:var(--rl);background:rgba(0,212,200,.12);color:var(--cy);cursor:pointer;font-size:11px;font-weight:600;transition:all .15s}
+.btn:hover{background:rgba(0,212,200,.22)}
+.btn.active{background:rgba(0,212,200,.3);outline:1px solid var(--cy)}
+.btn.sm{font-size:9px;padding:3px 7px}
+.btn-scene{min-width:48px}
+.btn-scene.s1{background:rgba(0,230,118,.12);color:var(--gn)}
+.btn-scene.s2{background:rgba(0,212,200,.12);color:var(--cy)}
+.btn-scene.s3{background:rgba(68,138,255,.12);color:var(--bl)}
+.btn-scene.s4{background:rgba(255,145,0,.12);color:var(--or)}
+.btn-scene.s5{background:rgba(224,64,251,.12);color:var(--mg)}
+.btn-scene.s6{background:rgba(255,61,61,.14);color:var(--rd)}
+.btn.danger{background:rgba(255,61,61,.14);color:var(--rd)}
+.btn.danger:hover{background:rgba(255,61,61,.25)}
+.btn.primary{background:rgba(0,230,118,.12);color:var(--gn)}
+.btn.primary:hover{background:rgba(0,230,118,.22)}
+
+.console-box{background:#0c141e;border:1px solid var(--bda);border-radius:var(--rl);height:180px;overflow-y:auto;font-family:Consolas,monospace;font-size:10px;padding:6px}
+.console-box .cl{padding:1px 0;display:flex;gap:8px}
+.console-box .cl .ct{color:var(--t3);min-width:50px}
+.console-box .clv{min-width:36px;font-weight:700;text-align:center}
+
+.inject-card{background:var(--card2);border:1px dashed var(--bd);border-radius:var(--rl);padding:10px;text-align:center;cursor:pointer;transition:all .25s}
+.inject-card:hover{border-style:solid;background:var(--card)}
+.inject-card .ic-icon{font-size:28px}
+.inject-card .ic-label{font-size:11px;font-weight:600;margin:4px 0}
+.inject-card .ic-desc{font-size:9px;color:var(--t3)}
+
+.c-green{color:var(--gn)}.c-cyan{color:var(--cy)}.c-blue{color:var(--bl)}
+.c-orange{color:var(--or)}.c-magenta{color:var(--mg)}.c-red{color:var(--rd)}
+.c-yellow{color:var(--yl)}.c-dim{color:var(--t3)}.c-bright{color:var(--tb)}
+.good{color:var(--gn)}.warn{color:var(--yl)}.danger{color:var(--rd)}.info{color:var(--cy)}
+
+@keyframes pulse-badge{0%,100%{opacity:1}50%{opacity:.5}}
+
+table{width:100%;border-collapse:collapse;font-size:11px}
+th,td{text-align:left;padding:5px 6px;border-bottom:1px dashed var(--bd);font-variant-numeric:tabular-nums}
+th{color:var(--t3);font-weight:600}
+
+.m-bar{height:6px;background:#0f1a26;border-radius:3px;overflow:hidden}
+.m-bar .fill{height:100%;border-radius:3px;transition:width .5s}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <div class="sidebar-title">💨 风电 AGC<small>实时监控面板 · RT_DB</small></div>
+    <nav class="side-nav">
+      <div class="nav-group">监控</div>
+      <button class="nav-btn" v-bind:class="{active:page==='overview'}" v-on:click="switchPage('overview')"><span class="no">📊</span>总览</button>
+      <button class="nav-btn" v-bind:class="{active:page==='fleet'}" v-on:click="switchPage('fleet')"><span class="no">💨</span>风机阵列</button>
+      <div class="nav-group">场景</div>
+      <button class="nav-btn" v-for="s in sceneIds" :key="s" v-bind:class="{active:page===scenePageId(s)}" v-on:click="switchPage(scenePageId(s))">
+        <span class="no" v-bind:class="sceneColorClass(s)">S{{s}}</span>{{sceneShortName(s)}}
+      </button>
+      <div class="nav-group">控制</div>
+      <button class="nav-btn" v-bind:class="{active:page==='console'}" v-on:click="switchPage('console')"><span class="no">🎮</span>控制台</button>
+      <button class="nav-btn" v-bind:class="{active:page==='inject'}" v-on:click="switchPage('inject')"><span class="no">📡</span>工况注入</button>
+    </nav>
+    <div class="sidebar-foot">数据源: AGC 主系统<br>推送: 300ms SocketIO</div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <span class="page-title">{{pageTitle}}</span>
+      <span class="spacer"></span>
+      <span class="st"><span class="dot" v-bind:class="connected?'on':'off'"></span>实时</span>
+      <span class="st">频率 <b class="c-cyan">{{fmtFreq}}</b> Hz</span>
+      <span class="st">功率 <b class="c-yellow">{{fmtPower}}</b> MW</span>
+      <span class="st">风速 <b class="c-cyan">{{fmtWind}}</b> m/s</span>
+      <span v-bind:class="'scene-badge s'+sim.sceneActive">{{sim.sceneName}}</span>
+      <span class="st">⏱ {{clock}}</span>
+    </header>
+
+    <div class="content">
+
+      <!-- ══════════ OVERVIEW ══════════ -->
+      <div v-show="page==='overview'">
+        <div class="kpi-row">
+          <div class="kpi" v-bind:class="{alarm:freqAlarm}">
+            <div class="label">电网频率</div><div class="value" v-bind:style="{color:freqAlarm?'var(--rd)':'var(--cy)'}">{{sim.frequency.toFixed(3)}}</div><div class="sub">Hz · Δ{{freqDelta}}</div>
+          </div>
+          <div class="kpi" v-bind:class="{alarm:voltAlarm}">
+            <div class="label">电网电压</div><div class="value">{{sim.voltage.toFixed(4)}}</div><div class="sub">pu</div>
+          </div>
+          <div class="kpi">
+            <div class="label">全场功率</div><div class="value info">{{sim.totalPower.toFixed(1)}}</div><div class="sub">MW / 30 MW</div>
+          </div>
+          <div class="kpi">
+            <div class="label">调度计划</div><div class="value c-blue">{{sim.schedulePower.toFixed(0)}}</div><div class="sub">MW</div>
+          </div>
+          <div class="kpi">
+            <div class="label">风速</div><div class="value info">{{sim.windSpeed.toFixed(1)}}</div><div class="sub">m/s</div>
+          </div>
+          <div class="kpi">
+            <div class="label">平均转速</div><div class="value" v-bind:style="{color:sim.avgRpm>0?'var(--tb)':'var(--rd)'}">{{sim.avgRpm.toFixed(1)}}</div><div class="sub">RPM</div>
+          </div>
+          <div class="kpi">
+            <div class="label">平均桨距</div><div class="value c-blue">{{sim.avgPitch.toFixed(1)}}</div><div class="sub">&deg;</div>
+          </div>
+          <div class="kpi" v-bind:class="{warn:curtailAlarm}">
+            <div class="label">限电比</div><div class="value" v-bind:style="{color:curtailAlarm?'var(--rd)':'var(--t2)'}">{{curtailPct}}</div><div class="sub">%</div>
+          </div>
+        </div>
+
+        <!-- SVG拓扑图 -->
+        <div class="card">
+          <div class="card-title">🗺 风电场拓扑与功率流向 <span class="hint">— 实时单线图 · 10×3MW 双馈风机</span></div>
+          <svg viewBox="0 0 900 260" class="flow-svg" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="aCyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#00d4c8"/></marker>
+              <marker id="aYellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#ffb74d"/></marker>
+              <marker id="aBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#448aff"/></marker>
+            </defs>
+            <g v-on:click="switchPage('fleet')" style="cursor:pointer">
+              <rect x="15" y="30" width="170" height="90" rx="10" fill="#13202c" stroke="#00d4c8" stroke-width="2"/>
+              <text x="100" y="55" text-anchor="middle" fill="#00d4c8" font-size="14" font-weight="700">💨 风电机组 ×10</text>
+              <text x="100" y="78" text-anchor="middle" fill="#dbe7f0" font-size="16" font-weight="700">{{sim.totalPower.toFixed(1)}} MW</text>
+              <text x="100" y="100" text-anchor="middle" fill="#7d93a5" font-size="10">10×3MW | 在线 {{onlineCount}} | 风速 {{sim.windSpeed.toFixed(1)}}m/s</text>
+            </g>
+            <g>
+              <rect x="250" y="30" width="160" height="90" rx="10" fill="#13202c" stroke="#ffb74d" stroke-width="1.5"/>
+              <text x="330" y="55" text-anchor="middle" fill="#ffb74d" font-size="14" font-weight="700">⚡ 集电线路 &amp; 变流器</text>
+              <text x="330" y="78" text-anchor="middle" fill="#dbe7f0" font-size="16" font-weight="700">{{utilPct}}%</text>
+              <text x="330" y="100" text-anchor="middle" fill="#7d93a5" font-size="10">利用率 · 690V/35kV · 总额定 30MW</text>
+            </g>
+            <g>
+              <rect x="475" y="30" width="160" height="90" rx="10" fill="#13202c" stroke="#448aff" stroke-width="2"/>
+              <text x="555" y="55" text-anchor="middle" fill="#448aff" font-size="14" font-weight="700">🔌 PCC 并网点</text>
+              <text x="555" y="78" text-anchor="middle" fill="#dbe7f0" font-size="16" font-weight="700">{{sim.totalPower.toFixed(1)}} MW</text>
+              <text x="555" y="100" text-anchor="middle" fill="#7d93a5" font-size="10">计划 {{sim.schedulePower.toFixed(0)}} MW | 偏差 {{trackErr.toFixed(1)}}</text>
+            </g>
+            <g>
+              <rect x="700" y="30" width="160" height="90" rx="10" fill="#13202c" stroke="#e040fb" stroke-width="1.5"/>
+              <text x="780" y="55" text-anchor="middle" fill="#e040fb" font-size="14" font-weight="700">🏭 电网</text>
+              <text x="780" y="78" text-anchor="middle" fill="#dbe7f0" font-size="16" font-weight="700">{{sim.frequency.toFixed(3)}} Hz</text>
+              <text x="780" y="100" text-anchor="middle" fill="#7d93a5" font-size="10">电压 {{sim.voltage.toFixed(3)}} pu</text>
+            </g>
+            <g style="cursor:pointer" v-on:click="switchPage('console')">
+              <rect x="250" y="160" width="160" height="75" rx="10" fill="#13202c" stroke="#5a6d85" stroke-width="1.5" stroke-dasharray="5 3"/>
+              <text x="330" y="185" text-anchor="middle" fill="#8899b0" font-size="14" font-weight="700">📋 调度计划</text>
+              <text x="330" y="210" text-anchor="middle" fill="#dbe7f0" font-size="16" font-weight="700">{{sim.schedulePower.toFixed(1)}} MW</text>
+            </g>
+            <line x1="185" y1="75" x2="250" y2="75" stroke="#00d4c8" stroke-width="2.5" marker-end="url(#aCyan)" class="topo-flow"/>
+            <text x="218" y="68" text-anchor="middle" fill="#00d4c8" font-size="10">{{sim.totalPower.toFixed(1)}}</text>
+            <line x1="410" y1="75" x2="475" y2="75" stroke="#ffb74d" stroke-width="2.5" marker-end="url(#aYellow)" class="topo-flow"/>
+            <text x="443" y="68" text-anchor="middle" fill="#ffb74d" font-size="10">{{sim.totalPower.toFixed(1)}}</text>
+            <line x1="635" y1="75" x2="700" y2="75" stroke="#448aff" stroke-width="2.5" marker-end="url(#aBlue)" class="topo-flow"/>
+            <text x="668" y="68" text-anchor="middle" fill="#448aff" font-size="10">{{sim.totalPower.toFixed(1)}}</text>
+            <line x1="350" y1="160" x2="540" y2="122" stroke="#5a6d85" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#aCyan)"/>
+          </svg>
+        </div>
+
+        <div class="grid grid2">
+          <div class="card">
+            <div class="card-title">📈 功率与频率趋势 <span class="hint">— 实时</span></div>
+            <div id="ovPowerChart" class="chart-box"></div>
+          </div>
+          <div class="card">
+            <div class="card-title">🌬 风速与桨距角 <span class="hint">— 实时</span></div>
+            <div id="ovWindChart" class="chart-box"></div>
+          </div>
+        </div>
+
+        <div class="grid grid3">
+          <div class="card" v-on:click="switchPage('fleet')" style="cursor:pointer" title="点击查看风机阵列详情">
+            <div class="card-title">💨 风机机群总览 <span class="hint">— 点击查看详情 →</span></div>
+            <div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:11px"><span class="c-dim">在线机组</span><span class="good" style="font-weight:700">{{onlineCount}}/10</span></div>
+            <div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:11px">
+              <span class="c-dim">总出力</span>
+              <div class="m-bar" style="flex:1"><div class="fill" v-bind:style="{width:utilPct+'%',background:utilBarColor}"></div></div>
+              <span style="font-family:var(--fm);min-width:70px;text-align:right">{{sim.totalPower.toFixed(1)}} / 30 MW</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:11px">
+              <span class="c-dim">平均转速</span>
+              <div class="m-bar" style="flex:1"><div class="fill" v-bind:style="{width:rpmBarPct+'%',background:sim.avgRpm>15?'var(--or)':'var(--cy)'}"></div></div>
+              <span style="font-family:var(--fm);min-width:70px;text-align:right">{{sim.avgRpm.toFixed(1)}} RPM</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:11px">
+              <span class="c-dim">限电状态</span>
+              <span v-bind:style="{color:sim.curtailRatio>0.4?'var(--rd)':'var(--gn)',fontWeight:'700'}">{{curtailLabel}}</span>
+              <span style="font-family:var(--fm);min-width:70px;text-align:right">{{curtailPct}}%</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📊 概览 <span class="hint">— 关键指标</span></div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px">
+              <div style="background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:8px">
+                <div style="font-size:10px;color:var(--t3)">当前场景</div>
+                <div v-bind:class="sceneColorClass(sim.sceneActive)" style="font-size:14px;font-weight:700">{{sim.sceneName}}</div>
+              </div>
+              <div style="background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:8px">
+                <div style="font-size:10px;color:var(--t3)">跟踪偏差</div>
+                <div v-bind:class="trackErrClass" style="font-size:16px;font-weight:700">{{trackErr.toFixed(1)}}</div>
+                <div style="font-size:9px;color:var(--t3)">MW</div>
+              </div>
+              <div style="background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:8px">
+                <div style="font-size:10px;color:var(--t3)">ROCOF</div>
+                <div class="info" style="font-size:16px;font-weight:700">{{sim.rocof.toFixed(3)}}</div>
+                <div style="font-size:9px;color:var(--t3)">Hz/s</div>
+              </div>
+              <div style="background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:8px">
+                <div style="font-size:10px;color:var(--t3)">MAE / RMSE</div>
+                <div style="font-size:16px;font-weight:700">{{sim.mae.toFixed(2)}} / {{sim.rmse.toFixed(2)}}</div>
+                <div style="font-size:9px;color:var(--t3)">MW</div>
+              </div>
+              <div style="background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:8px">
+                <div style="font-size:10px;color:var(--t3)">通信状态</div>
+                <div v-bind:class="sim.commHealthy?'good':'danger'" style="font-size:16px;font-weight:700">{{sim.commHealthy?'正常':'中断'}}</div>
+              </div>
+              <div style="background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:8px">
+                <div style="font-size:10px;color:var(--t3)">S6 策略</div>
+                <div class="info" style="font-size:13px;font-weight:700">{{s6Label}}</div>
+              </div>
+            </div>
+            <div class="scene-log">
+              <div v-for="(l,i) in sceneLog" :key="i" class="entry">
+                <span class="time">{{l.t}}</span>
+                <span v-bind:class="{hl:l.scene!=='S1 稳态'}">{{l.msg}}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🚨 告警</div>
+            <div v-if="alerts.length===0" class="alert-none">✓ 无活动告警</div>
+            <div v-for="(a,i) in alerts" :key="i" class="alert-item" v-bind:class="a.level==='crit'?'alert-crit':'alert-warn'">
+              <span>{{a.level==='crit'?'🔴':'⚠'}}</span>{{a.msg||a.text}}
+            </div>
+            <div class="card-title" style="margin-top:10px">💓 系统状态</div>
+            <table>
+              <tr><th>运行周期</th><td>#{{sim.cycle}}</td></tr>
+              <tr><th>心跳</th><td>#{{sim.heartbeat}}</td></tr>
+              <tr><th>在线客户端</th><td>{{clientCount}}</td></tr>
+              <tr><th>运行模式</th><td>{{sim.mode||'Auto'}}</td></tr>
+              <tr><th>紧急状态</th><td v-bind:class="sim.emergency?'danger':'good'">{{sim.emergency?'⚠ 紧急':'正常'}}</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══════════ FLEET ══════════ -->
+      <div v-show="page==='fleet'">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <span style="font-size:11px;color:var(--t3)">在线: <b class="good">{{onlineCount}}</b>/10</span>
+          <span style="font-size:11px;color:var(--t3)">总额定: 30 MW | 单台: 3 MW</span>
+          <span style="font-size:11px;color:var(--t3);margin-left:auto">💨 双馈异步 · 切入3m/s 额定12m/s 切出25m/s</span>
+        </div>
+        <div class="fleet-grid">
+          <div v-for="t in turbineList" :key="t.id" class="unit-tile" v-bind:class="tileClass(t)">
+            <div class="u-name">
+              <span>{{t.id}}</span>
+              <span class="u-st" v-bind:class="t.avail?(t.powerMW>2.5?'run':t.powerMW>0.5?'run':'lim'):'off'">{{t.avail?(t.powerMW>2.5?'MPPT':t.powerMW>0.5?'RUN':'LOW'):'OFF'}}</span>
+            </div>
+            <div class="u-value" v-bind:style="{color:t.avail?(t.powerMW>2.5?'var(--gn)':t.powerMW>1?'var(--yl)':'var(--or)'):'var(--t3)'}">
+              {{t.avail?t.powerMW.toFixed(1):'--'}} <span style="font-size:10px;color:var(--t3)">MW</span>
+            </div>
+            <div class="u-sub">{{t.windSpeedMs.toFixed(1)}} m/s | {{t.rotorSpeedRPM.toFixed(0)}} RPM | {{t.pitchAngleDeg.toFixed(1)}}&deg;</div>
+            <div class="u-bar"><div class="u-bar-fill" v-bind:style="{width:(t.powerMW/3*100)+'%',background:t.powerMW>2.5?'var(--gn)':t.powerMW>1?'var(--yl)':'var(--or)'}"></div></div>
+            <div class="u-sub" style="margin-top:2px">
+              <span v-bind:style="{color:t.avail?'var(--t3)':'var(--rd)'}">{{t.avail?(t.state||'NORMAL'):'OFF'}}</span>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:8px">
+          <div class="card-title">📊 风机功率柱状图</div>
+          <div id="fleetBarChart" class="chart-box tall"></div>
+        </div>
+      </div>
+
+      <!-- ══════════ SCENE PAGES S1-S6 ══════════ -->
+      <div v-for="s in sceneIds" :key="s" v-show="page===scenePageId(s)">
+        <div class="scene-hero">
+          <div class="sh-title" v-bind:class="sceneColorClass(s)">场景 S{{s}} — {{sceneFullName(s)}}</div>
+          <div class="sh-desc">{{sceneDescText(s)}}</div>
+        </div>
+
+        <div class="scene-metrics">
+          <div class="scene-metric"><div class="label">电网频率</div><div v-bind:class="freqAlarm?'danger':'info'" class="value">{{sim.frequency.toFixed(3)}} Hz</div></div>
+          <div class="scene-metric"><div class="label">全场功率</div><div class="value info">{{sim.totalPower.toFixed(1)}} MW</div></div>
+          <div class="scene-metric"><div class="label">调度计划</div><div class="value c-blue">{{sim.schedulePower.toFixed(1)}} MW</div></div>
+          <div class="scene-metric"><div class="label">风速</div><div v-bind:class="sim.windSpeed>20?'danger':'info'" class="value">{{sim.windSpeed.toFixed(1)}} m/s</div></div>
+        </div>
+
+        <!-- S1 稳态 -->
+        <div v-if="s===1">
+          <div class="card"><div class="card-title">📈 功率跟踪曲线 <span class="hint">— 实际 vs 计划</span></div><div id="sc1Chart" class="chart-box tall"></div></div>
+          <div class="grid grid3">
+            <div class="card"><div class="card-title">🎯 跟踪精度</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+                <div class="scene-metric"><div class="label">偏差 ΔP</div><div v-bind:class="Math.abs(trackErr)<1?'good':'warn'" class="value">{{trackErr.toFixed(1)}} MW</div></div>
+                <div class="scene-metric"><div class="label">偏差率</div><div v-bind:class="Math.abs(trackErr)/30*100<3?'good':'warn'" class="value">{{(Math.abs(trackErr)/30*100).toFixed(1)}}%</div></div>
+                <div class="scene-metric"><div class="label">MAE</div><div class="value">{{sim.mae.toFixed(2)}} MW</div></div>
+                <div class="scene-metric"><div class="label">RMSE</div><div class="value">{{sim.rmse.toFixed(2)}} MW</div></div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">💨 风机分配 <span class="hint">— 等裕度策略</span></div>
+              <div v-for="t in turbineList.slice(0,5)" :key="t.id" style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:10px">
+                <span class="c-dim" style="min-width:40px">{{t.id}}</span>
+                <div class="m-bar" style="flex:1"><div class="fill" v-bind:style="{width:(t.powerMW/3*100)+'%',background:t.powerMW>2.5?'var(--gn)':t.powerMW>1?'var(--yl)':'var(--or)'}"></div></div>
+                <span style="font-family:var(--fm);min-width:60px;text-align:right">{{t.powerMW.toFixed(1)}} MW</span>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">⚙ 机组状态</div>
+              <div style="background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:8px;margin-bottom:4px"><div style="font-size:10px;color:var(--t3)">在线机组</div><div class="good" style="font-size:14px;font-weight:700">{{onlineCount}} / 10</div></div>
+              <div style="background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:8px;margin-bottom:4px"><div style="font-size:10px;color:var(--t3)">平均利用率</div><div class="info" style="font-size:14px;font-weight:700">{{utilPct}}%</div></div>
+              <div style="background:var(--card2);border:1px solid var(--bd);border-radius:var(--rl);padding:8px"><div style="font-size:10px;color:var(--t3)">运行模式</div><div style="font-size:14px;font-weight:700">{{sim.mode||'Auto'}}</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- S2 风速扰动 -->
+        <div v-if="s===2">
+          <div class="card"><div class="card-title">🌬 风速波动曲线 <span class="hint">— 实时风速 &amp; 功率波动抑制</span></div><div id="sc2Chart" class="chart-box tall"></div></div>
+          <div class="grid grid3">
+            <div class="card"><div class="card-title">💨 波动检测</div>
+              <div class="scene-metrics" style="grid-template-columns:1fr 1fr">
+                <div class="scene-metric"><div class="label">当前风速</div><div v-bind:class="sim.windSpeed>20?'danger':'info'" class="value">{{sim.windSpeed.toFixed(1)}} m/s</div></div>
+                <div class="scene-metric"><div class="label">风速变化率</div><div class="value warn">{{sim.rocof!==undefined?(sim.rocof*10).toFixed(1):'0.0'}} m/s&sup2;</div></div>
+                <div class="scene-metric"><div class="label">功率波动</div><div class="value warn">{{Math.abs(trackErr).toFixed(1)}} MW</div></div>
+                <div class="scene-metric"><div class="label">抑制率</div><div class="value good">{{Math.abs(trackErr)<2?'&gt;80':'&lt;50'}}%</div></div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">🛡 抑制策略 <span class="hint">— 功率平滑</span></div>
+              <div style="font-size:11px;color:var(--t3);line-height:1.8">
+                <div>✅ 桨距角快速调节</div>
+                <div>✅ 转子惯性储能释放</div>
+                <div>✅ 功率变化率限制 &le;5%Pn/s</div>
+                <div v-if="sim.windSpeed>20" class="warn">⚠ 风速接近切出，准备保护</div>
+                <div v-else class="good">✅ 风速正常范围</div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">💨 风机响应 <span class="hint">— 前5台</span></div>
+              <div v-for="t in turbineList.slice(0,5)" :key="t.id" style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:10px">
+                <span class="c-dim" style="min-width:40px">{{t.id}}</span>
+                <div class="m-bar" style="flex:1"><div class="fill" v-bind:style="{width:(t.windSpeedMs/25*100)+'%',background:t.windSpeedMs>20?'var(--rd)':t.windSpeedMs>12?'var(--yl)':'var(--cy)'}"></div></div>
+                <span style="font-family:var(--fm);min-width:50px;text-align:right">{{t.windSpeedMs.toFixed(1)}} m/s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- S3 一次调频 -->
+        <div v-if="s===3">
+          <div class="card"><div class="card-title">📉 频率响应曲线 <span class="hint">— Droop 特性 · Deadband &plusmn;0.10Hz</span></div><div id="sc3Chart" class="chart-box tall"></div></div>
+          <div class="grid grid3">
+            <div class="card"><div class="card-title">⚡ Droop 特性</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+                <div class="scene-metric"><div class="label">Δf 频差</div><div v-bind:class="freqAlarm?'danger':'good'" class="value">{{freqDelta}} Hz</div></div>
+                <div class="scene-metric"><div class="label">ΔP 需求</div><div class="value warn">{{droopDP.toFixed(1)}} MW</div></div>
+                <div class="scene-metric"><div class="label">FR 状态</div><div v-bind:class="freqAlarm?'warn':'good'" class="value">{{freqAlarm?'ACTIVE':'READY'}}</div></div>
+                <div class="scene-metric"><div class="label">限幅</div><div class="value info">&plusmn;3 MW</div></div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">📐 Droop 曲线 <span class="hint">— 4% Droop</span></div>
+              <div style="text-align:center;font-family:var(--fm);font-size:12px;color:var(--t3);line-height:1.8">
+                <div>ΔP = -(Pn/fn) × Δf / droop</div>
+                <div class="c-cyan" style="font-size:22px;margin:8px 0">ΔP = -(30/50) × Δf / 0.04</div>
+                <div>死区 &plusmn;0.10 Hz | 限幅 &plusmn;3MW(10%Pn)</div>
+                <div v-bind:class="freqAlarm?'danger':'good'" style="margin-top:8px;font-size:14px;font-weight:700">
+                  {{freqAlarm?'🔴 调频激活':'🟢 频差在死区内'}}
+                </div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">💨 风机调频分配</div>
+              <div v-for="t in turbineList.slice(0,5)" :key="t.id" style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:10px">
+                <span class="c-dim" style="min-width:40px">{{t.id}}</span>
+                <div class="m-bar" style="flex:1"><div class="fill" v-bind:style="{width:(t.powerMW/3*100)+'%',background:freqAlarm?'var(--yl)':'var(--gn)'}"></div></div>
+                <span style="font-family:var(--fm);min-width:45px;text-align:right">{{t.powerMW.toFixed(1)}}</span>
+                <span v-if="freqAlarm" class="warn" style="font-size:8px">FR</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- S4 爬坡跟踪 -->
+        <div v-if="s===4">
+          <div class="card"><div class="card-title">📈 爬坡跟踪曲线 <span class="hint">— 调度阶跃响应 · 3MW/min</span></div><div id="sc4Chart" class="chart-box tall"></div></div>
+          <div class="grid grid3">
+            <div class="card"><div class="card-title">🟠 爬坡指标</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+                <div class="scene-metric"><div class="label">当前功率</div><div class="value info">{{sim.totalPower.toFixed(1)}} MW</div></div>
+                <div class="scene-metric"><div class="label">目标功率</div><div class="value c-blue">{{sim.schedulePower.toFixed(1)}} MW</div></div>
+                <div class="scene-metric"><div class="label">跟踪误差</div><div v-bind:class="Math.abs(trackErr)<0.5?'good':'warn'" class="value">{{trackErr.toFixed(1)}} MW</div></div>
+                <div class="scene-metric"><div class="label">完成度</div><div class="value warn">{{rampCompletePct}}%</div></div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">⚙ 机械限制</div>
+              <div style="font-size:11px;color:var(--t3);line-height:1.8">
+                <div>⚡ 扭矩 &le; 1500 kNm</div>
+                <div>🔧 变桨 &le; 0.3&deg;/s</div>
+                <div>📐 最大桨距角 8&deg;</div>
+                <div>📈 爬坡率 3 MW/min</div>
+                <div v-bind:class="Math.abs(trackErr)>5?'warn':'good'" style="margin-top:8px;font-weight:700">{{Math.abs(trackErr)>5?'🟠 大阶跃 |ΔP|>5MW':'✅ 正常范围'}}</div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">💨 爬坡响应</div>
+              <div v-for="t in turbineList.slice(0,5)" :key="t.id" style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:10px">
+                <span class="c-dim" style="min-width:40px">{{t.id}}</span>
+                <div class="m-bar" style="flex:1"><div class="fill" v-bind:style="{width:(t.powerMW/3*100)+'%',background:'var(--or)'}"></div></div>
+                <span style="font-family:var(--fm);min-width:45px;text-align:right" class="c-orange">{{t.powerMW.toFixed(1)}}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- S5 限电优化 -->
+        <div v-if="s===5">
+          <div class="card"><div class="card-title">🟣 限电优化曲线 <span class="hint">— 限电比 &gt;40% · 三模式</span></div><div id="sc5Chart" class="chart-box tall"></div></div>
+          <div class="grid grid3">
+            <div class="card"><div class="card-title">🟣 限电指标</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+                <div class="scene-metric"><div class="label">限电比例</div><div v-bind:class="sim.curtailRatio>0.4?'danger':'info'" class="value">{{curtailPct}}%</div></div>
+                <div class="scene-metric"><div class="label">可用功率</div><div class="value info">{{availPowerMW}} MW</div></div>
+                <div class="scene-metric"><div class="label">限电后功率</div><div class="value c-magenta">{{sim.totalPower.toFixed(1)}} MW</div></div>
+                <div class="scene-metric"><div class="label">模式</div><div class="value info">{{sim.curtailRatio>0.4?'DEEP_CURTAIL':'NORMAL'}}</div></div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">⚙ 三模式策略</div>
+              <div style="font-size:11px;color:var(--t3);line-height:1.8">
+                <div v-bind:style="{color:sim.curtailRatio>0.4?'var(--mg)':'var(--t3)'}">① 均匀限电 — 等比例减载</div>
+                <div>② 部分运行 — 部分停机</div>
+                <div>③ 转子储能 — 利用惯性</div>
+                <div v-bind:class="sim.curtailRatio>0.4?'danger':'good'" style="margin-top:8px;font-weight:700">{{sim.curtailRatio>0.4?'🟣 深度限电激活':'✅ 正常发电'}}</div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">💨 限电分配</div>
+              <div v-for="t in turbineList.slice(0,5)" :key="t.id" style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:10px">
+                <span class="c-dim" style="min-width:40px">{{t.id}}</span>
+                <div class="m-bar" style="flex:1"><div class="fill" v-bind:style="{width:(t.powerMW/3*100)+'%',background:sim.curtailRatio>0.4?'var(--mg)':'var(--gn)'}"></div></div>
+                <span style="font-family:var(--fm);min-width:45px;text-align:right">{{t.powerMW.toFixed(1)}}</span>
+                <span v-if="sim.curtailRatio>0.4" class="c-magenta" style="font-size:8px">限</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- S6 安全保护 -->
+        <div v-if="s===6">
+          <div class="card"><div class="card-title">🔴 安全监控曲线 <span class="hint">— 通信中断 &amp; 极端风况</span></div><div id="sc6Chart" class="chart-box tall"></div></div>
+          <div class="grid grid3">
+            <div class="card"><div class="card-title">🛡 安全状态</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+                <div class="scene-metric"><div class="label">通信</div><div v-bind:class="sim.commHealthy?'good':'danger'" class="value">{{sim.commHealthy?'正常':'中断'}}</div></div>
+                <div class="scene-metric"><div class="label">风速</div><div v-bind:class="sim.windSpeed>20?'danger':'good'" class="value">{{sim.windSpeed.toFixed(1)}} m/s</div></div>
+                <div class="scene-metric"><div class="label">紧急状态</div><div v-bind:class="sim.emergency?'danger':'good'" class="value">{{sim.emergency?'⚠ 紧急':'正常'}}</div></div>
+                <div class="scene-metric"><div class="label">S6 策略</div><div class="value info">{{s6Label}}</div></div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">⚙ 三策略</div>
+              <div style="font-size:11px;color:var(--t3);line-height:1.8">
+                <div v-bind:style="{fontWeight:sim.s6Strategy===1?'700':'400',color:sim.s6Strategy===1?'var(--gn)':'var(--t3)'}">① Hold — 保持当前功率</div>
+                <div v-bind:style="{fontWeight:sim.s6Strategy===2?'700':'400',color:sim.s6Strategy===2?'var(--yl)':'var(--t3)'}">② RampDown — 斜坡降载</div>
+                <div v-bind:style="{fontWeight:sim.s6Strategy===3?'700':'400',color:sim.s6Strategy===3?'var(--rd)':'var(--t3)'}">③ Feather — 顺桨停机</div>
+              </div>
+            </div>
+            <div class="card"><div class="card-title">💨 机组安全</div>
+              <div v-for="t in turbineList.slice(0,5)" :key="t.id" style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:10px">
+                <span class="c-dim" style="min-width:40px">{{t.id}}</span>
+                <div class="m-bar" style="flex:1"><div class="fill" v-bind:style="{width:(t.powerMW/3*100)+'%',background:t.avail?(sim.emergency?'var(--rd)':'var(--gn)'):'var(--rd)'}"></div></div>
+                <span style="font-family:var(--fm);min-width:35px;text-align:right">{{t.avail?t.powerMW.toFixed(1):'OFF'}}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══════════ CONSOLE ══════════ -->
+      <div v-show="page==='console'">
+        <div class="ctrl-row">
+          <div class="ctrl-section" style="flex:1">
+            <div class="cs-title">🎮 场景控制</div>
+            <div style="display:flex;gap:3px;flex-wrap:wrap">
+              <button v-for="s in sceneIds" :key="s" class="btn sm btn-scene" v-bind:class="'s'+s+(sim.sceneActive===s?' active':'')" v-on:click="reqScene(s)">S{{s}} {{sceneShortName(s)}}</button>
+            </div>
+          </div>
+          <div class="ctrl-section">
+            <div class="cs-title">🛡 S6 策略</div>
+            <div style="display:flex;gap:3px">
+              <button class="btn sm" v-on:click="selectS6(1)" v-bind:class="{active:sim.s6Strategy===1}">① Hold</button>
+              <button class="btn sm" v-on:click="selectS6(2)" v-bind:class="{active:sim.s6Strategy===2}">② RampDown</button>
+              <button class="btn sm" v-on:click="selectS6(3)" v-bind:class="{active:sim.s6Strategy===3}">③ Feather</button>
+            </div>
+          </div>
+          <div class="ctrl-section">
+            <div class="cs-title">⚡ 操作</div>
+            <button class="btn sm danger" v-on:click="doReset">🔄 复位</button>
+            <button class="btn sm primary" v-on:click="doRecover">🤖 自动</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">💻 事件日志 <span class="hint">— SocketIO 实时推送</span></div>
+          <div class="console-box" ref="consoleBox">
+            <div class="cl" v-for="(l,i) in consoleLines" :key="i">
+              <span class="ct">{{l.t}}</span><span class="clv" v-bind:style="{color:l.level==='ok'?'var(--gn)':l.level==='warn'?'var(--yl)':'var(--rd)'}">[{{l.level.toUpperCase()}}]</span><span>{{l.msg}}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══════════ INJECT ══════════ -->
+      <div v-show="page==='inject'">
+        <div class="grid grid4">
+          <div v-for="inj in injections" :key="inj.id" class="inject-card" v-on:click="doInject(inj.id)" v-bind:style="{borderColor:inj.color}">
+            <div class="ic-icon">{{inj.icon}}</div>
+            <div class="ic-label">{{inj.label}}</div>
+            <div class="ic-desc">{{inj.desc}}</div>
+          </div>
+        </div>
+        <div style="text-align:center;margin-top:10px">
+          <button class="btn primary" v-on:click="doInject('recover')" style="padding:8px 20px;font-size:13px">🔄 清除所有注入 — 恢复稳态</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// Global error handler — show JS errors visibly in the page
+window.onerror = function(msg, src, line, col, err){
+  var el = document.getElementById('app');
+  if(el) el.innerHTML = '<div style=\"color:#ff3d3d;padding:40px;font-family:monospace;font-size:14px;background:#080c12;height:100vh\"><h2 style=\"color:#ff3d3d\">JavaScript Error</h2><p>'+msg+'</p><p style=\"color:#8899b0;font-size:12px\">'+src+' line '+line+':'+col+'</p><pre style=\"color:#ffb74d;margin-top:10px;white-space:pre-wrap\">'+(err&&err.stack?err.stack:'')+'</pre></div>';
+  return false;
+};
+
+var _vue = Vue;
+var _createApp = _vue.createApp;
+var _ref = _vue.ref;
+var _reactive = _vue.reactive;
+var _computed = _vue.computed;
+var _watch = _vue.watch;
+var _onMounted = _vue.onMounted;
+var _onUnmounted = _vue.onUnmounted;
+var _nextTick = _vue.nextTick;
+
+var app = _createApp({
+  setup: function(){
+    var page = _ref('overview');
+    var clock = _ref('00:00:00');
+    var connected = _ref(false);
+    var clientCount = _ref(0);
+    var consoleBox = _ref(null);
+
+    var sim = _reactive({
+      frequency: 50, voltage: 1, totalPower: 0, schedulePower: 15,
+      windSpeed: 8, commHealthy: true, sceneActive: 1, sceneName: 'S1 稳态',
+      sceneDesc: '稳态计划跟踪', mode: 'Auto', emergency: false, cycle: 0,
+      avgRpm: 12, avgPitch: 0, curtailRatio: 0, s6Strategy: 1,
+      extremeType: 0, rocof: 0, mae: 0, rmse: 0, heartbeat: 0
+    });
+
+    var turbines = _reactive({});
+    var history = _ref([]);
+    var alerts = _ref([]);
+    var consoleLines = _reactive([]);
+    var sceneLog = _reactive([]);
+
+    var sceneIds = [1,2,3,4,5,6];
+    var sceneNameMap = {1:'稳态跟踪',2:'风速扰动',3:'一次调频',4:'爬坡跟踪',5:'限电优化',6:'安全保护'};
+    var sceneDescMap = {
+      1:'🟢 系统正常运行，秒级跟踪调度计划 | 10×3MW 双馈风机 | 总额定 30MW | 等裕度功率分配 | MAE/RMSE 实时评估',
+      2:'🔵 风速突变检测阈值 &gt;1.5 m/s（WIND_GUST）→ SUPPRESS 模式 | 锁存扰动前功率基线 | 限制变化率 &le; 5% Pn/s | 恢复：风速稳定 &ge;5周期',
+      3:'🔷 频率偏差 &gt; 死区 &plusmn;0.10 Hz → FR: READY→ACTIVE | ΔP = -(Pn/fn)×Δf/droop(4%) | 限幅 &plusmn;3MW(10%Pn) | 恢复: |Δf| &lt; 0.02 Hz',
+      4:'🟠 调度阶跃 |ΔP| &gt; 5 MW → RAMP_TRACKING | 爬坡率 3 MW/min(10%Pn/min) | 扭矩/桨距机械限制 | KPI: 跟踪误差 &lt; 0.5 MW',
+      5:'🟣 限电比 R &gt; 40% → DEEP_CURTAILMENT | 三模式: A均匀限电 | B部分运行(停机) | C转子储能 | 安全指数 S&ge;0.5 约束',
+      6:'🔴 通信中断 &ge;5心跳 或 风速&gt;切出 → S6 自治 | 三策略: Hold保持 | RampDown斜坡降载 | Feather顺桨停机 | 优先级最高'
+    };
+    var sceneColorMap = {1:'c-green',2:'c-cyan',3:'c-blue',4:'c-orange',5:'c-magenta',6:'c-red'};
+
+    function scenePageId(s){ return 'scene'+s; }
+    function sceneShortName(s){ return sceneNameMap[s]||''; }
+    function sceneFullName(s){ return sceneNameMap[s]||''; }
+    function sceneDescText(s){ return sceneDescMap[s]||''; }
+    function sceneColorClass(s){ return sceneColorMap[s]||''; }
+
+    var pageTitle = _computed(function(){
+      var m = {overview:'📊 系统总览',fleet:'💨 风机阵列',console:'🎮 控制台',inject:'📡 工况注入'};
+      if(page.value.indexOf('scene')===0){
+        var sn = parseInt(page.value.slice(5));
+        return sn + ' — ' + (sceneNameMap[sn]||'');
+      }
+      return m[page.value]||'Wind-AGC';
+    });
+
+    var onlineCount = _computed(function(){
+      return Object.values(turbines).filter(function(t){return t.avail;}).length;
+    });
+
+    var turbineList = _computed(function(){
+      var list = [];
+      Object.keys(turbines).forEach(function(id){
+        var t = turbines[id];
+        list.push(Object.assign({id:id}, t));
+      });
+      list.sort(function(a,b){ return a.id.localeCompare(b.id); });
+      return list;
+    });
+
+    var utilPct = _computed(function(){
+      if(sim.totalPower>0) return (sim.totalPower/30*100).toFixed(0);
+      return '0';
+    });
+
+    var utilBarColor = _computed(function(){
+      var p = parseFloat(utilPct.value);
+      if(p>80) return 'var(--gn)';
+      if(p>40) return 'var(--yl)';
+      return 'var(--or)';
+    });
+
+    var rpmBarPct = _computed(function(){
+      return (sim.avgRpm/18*100).toFixed(0);
+    });
+
+    var curtailPct = _computed(function(){
+      return (sim.curtailRatio*100).toFixed(0);
+    });
+
+    var curtailAlarm = _computed(function(){
+      return sim.curtailRatio > 0.4;
+    });
+
+    var curtailLabel = _computed(function(){
+      return sim.curtailRatio>0.4?'限电中':'正常发电';
+    });
+
+    var freqDelta = _computed(function(){
+      return (sim.frequency-50).toFixed(3);
+    });
+
+    var freqAlarm = _computed(function(){
+      return Math.abs(sim.frequency-50) > 0.10;
+    });
+
+    var voltAlarm = _computed(function(){
+      return sim.voltage < 0.95 || sim.voltage > 1.05;
+    });
+
+    var trackErr = _computed(function(){
+      return sim.totalPower - sim.schedulePower;
+    });
+
+    var trackErrClass = _computed(function(){
+      var ae = Math.abs(trackErr.value);
+      if(ae<1) return 'good';
+      if(ae<3) return 'warn';
+      return 'danger';
+    });
+
+    var droopDP = _computed(function(){
+      return (-30/50 * (sim.frequency-50) / 0.04);
+    });
+
+    var s6Label = _computed(function(){
+      if(sim.s6Strategy===1) return 'Hold';
+      if(sim.s6Strategy===2) return 'RampDown';
+      return 'Feather';
+    });
+
+    var rampCompletePct = _computed(function(){
+      if(sim.schedulePower===0) return '0';
+      var pct = sim.totalPower / Math.max(0.1, sim.schedulePower) * 100;
+      return Math.min(100, pct).toFixed(0);
+    });
+
+    var availPowerMW = _computed(function(){
+      var ratio = Math.max(0, sim.curtailRatio - 0.01);
+      if(ratio<=0) return sim.totalPower.toFixed(1);
+      return (sim.totalPower/(1-ratio)).toFixed(1);
+    });
+
+    var fmtFreq = _computed(function(){ return sim.frequency.toFixed(2); });
+    var fmtPower = _computed(function(){ return sim.totalPower.toFixed(1); });
+    var fmtWind = _computed(function(){ return sim.windSpeed.toFixed(1); });
+
+    var injections = [
+      {id:'freq-lo',icon:'📉',label:'低频 49.85 Hz',desc:'→ S3 一次调频',color:'#ff3d3d'},
+      {id:'freq-hi',icon:'📈',label:'高频 50.15 Hz',desc:'→ S3 过频减发',color:'#ff9100'},
+      {id:'wind-gust',icon:'💨',label:'阵风 22 m/s',desc:'→ S2 风速扰动',color:'#ffb74d'},
+      {id:'wind-drop',icon:'🌪',label:'风速骤降 2 m/s',desc:'→ S2 低风速',color:'#00d4c8'},
+      {id:'volt-hi',icon:'⚡',label:'电压越限 1.08pu',desc:'→ S6 紧急保护',color:'#e040fb'},
+      {id:'extreme-wind',icon:'⛈',label:'极端风况 28m/s',desc:'→ S6 切出保护',color:'#ff1744'},
+      {id:'plan-lo',icon:'📋',label:'限电 5 MW',desc:'→ S4/S5 阶跃优化',color:'#448aff'},
+      {id:'comm-loss',icon:'🔌',label:'通信中断',desc:'→ S6 自治',color:'#ff3d3d'}
+    ];
+
+    function tileClass(t){
+      if(!t.avail) return 'off';
+      if(sim.curtailRatio>0.4) return 'curtailed';
+      if(Math.abs(sim.frequency-50)>0.1) return t.powerMW>2?'fr-up':'fr-dn';
+      if(sim.windSpeed>20) return 'gust';
+      return '';
+    }
+
+    function switchPage(p){
+      page.value = p;
+      _nextTick(function(){
+        Object.values(charts).forEach(function(c){
+          try { if(c) c.resize(); } catch(e){}
+        });
+        initSceneCharts(p);
+      });
+    }
+
+    // SocketIO
+    var socket = null;
+    function connectSocket(){
+      socket = io('/',{transports:['websocket','polling']});
+      socket.on('connect', function(){
+        connected.value = true;
+        addLog('ok','SocketIO 已连接');
+      });
+      socket.on('disconnect', function(){
+        connected.value = false;
+      });
+      socket.on('welcome', function(data){
+        if(data.sim) Object.assign(sim, data.sim);
+        if(data.history) history.value = data.history;
+        if(data.alerts) alerts.value = data.alerts;
+        if(data.clients !== undefined) clientCount.value = data.clients;
+      });
+      socket.on('agc_update', function(data){
+        var prevScene = sim.sceneActive;
+        if(data.sim){
+          Object.assign(sim, data.sim);
+          if(data.sim.turbines){
+            Object.keys(data.sim.turbines).forEach(function(id){
+              if(!turbines[id]) turbines[id] = _reactive({});
+              Object.assign(turbines[id], data.sim.turbines[id]);
+            });
+          }
+        }
+        if(data.history) history.value = data.history;
+        if(data.alerts){
+          alerts.value = data.alerts;
+          data.alerts.forEach(function(a){
+            var found = consoleLines.some(function(l){ return l.msg===a.msg; });
+            if(!found) addLog(a.level||'warn', a.msg||a.text);
+          });
+        }
+        if(data.clientCount !== undefined) clientCount.value = data.clientCount;
+        if(prevScene !== sim.sceneActive){
+          var sn = sim.sceneName||('S'+sim.sceneActive);
+          sceneLog.unshift({t: new Date().toTimeString().slice(0,8), msg: '→ '+sn, scene: sn});
+          if(sceneLog.length>50) sceneLog.splice(50);
+        }
+        _nextTick(function(){ updateCharts(); });
+      });
+      socket.on('inject_result', function(data){
+        addLog(data.ok?'ok':'crit', data.msg);
+      });
+      socket.on('reset_result', function(data){
+        addLog('ok', data.msg);
+      });
+    }
+
+    function addLog(lvl, msg){
+      consoleLines.unshift({t: new Date().toTimeString().slice(0,8), level: lvl, msg: msg});
+      if(consoleLines.length>200) consoleLines.splice(200);
+    }
+
+    function reqScene(id){
+      if(socket) socket.emit('scene_request',{scene:id});
+      addLog('warn','场景切换请求: S'+id);
+    }
+    function selectS6(n){
+      if(socket) socket.emit('s6_select',{strategy:n});
+      var names = {1:'Hold',2:'RampDown',3:'Feather'};
+      addLog('warn','S6策略: '+(names[n]||n));
+    }
+    function doInject(type){
+      if(socket) socket.emit('inject',{type:type});
+      addLog('warn','注入: '+type);
+    }
+    function doReset(){
+      if(socket) socket.emit('reset');
+    }
+    function doRecover(){
+      if(socket) socket.emit('inject',{type:'recover'});
+    }
+
+    // Charts
+    var charts = {};
+
+    function initCharts(){
+      charts.ovPower = initChart('ovPowerChart');
+      charts.ovWind = initChart('ovWindChart');
+      charts.fleetBar = initChart('fleetBarChart');
+      charts.sc1 = initChart('sc1Chart');
+      charts.sc2 = initChart('sc2Chart');
+      charts.sc3 = initChart('sc3Chart');
+      charts.sc4 = initChart('sc4Chart');
+      charts.sc5 = initChart('sc5Chart');
+      charts.sc6 = initChart('sc6Chart');
+      window.addEventListener('resize', function(){
+        Object.values(charts).forEach(function(c){
+          try { if(c) c.resize(); } catch(e){}
+        });
+      });
+    }
+
+    function initChart(id){
+      var el = document.getElementById(id);
+      if(!el) return null;
+      return echarts.init(el);
+    }
+
+    function initSceneCharts(p){
+      if(p.indexOf('scene')!==0) return;
+      var sn = parseInt(p.slice(5));
+      var key = 'sc'+sn;
+      if(!charts[key] || charts[key].isDisposed()){
+        charts[key] = initChart(key+'Chart');
+      }
+    }
+
+    function makeOpt(xData, series, opts){
+      if(!opts) opts = {};
+      if(!xData) xData = [];
+      if(!series) series = [];
+      var base = {
+        backgroundColor: '#131c28',
+        textStyle: {color: '#8899b0'},
+        grid: {left:50, right:20, top:15, bottom:25},
+        tooltip: {trigger:'axis'},
+        xAxis: {type:'category', data:xData, axisLine:{lineStyle:{color:'#1e3048'}}, axisLabel:{fontSize:9, color:'#5a6d85'}},
+        yAxis: {type:'value', axisLine:{lineStyle:{color:'#1e3048'}}, splitLine:{lineStyle:{color:'#1e3048',type:'dashed'}}, axisLabel:{fontSize:9, color:'#5a6d85'}},
+        series: series.map(function(s){
+          return Object.assign({type:'line', symbol:'none', smooth:true, lineStyle:{width:1.5}}, s);
+        })
+      };
+      return Object.assign(base, opts);
+    }
+
+    function setChart(ch, opt){
+      if(ch && !ch.isDisposed()) ch.setOption(opt, false);  // merge mode: smoother updates
+    }
+
+    var _lastChartUpdate = 0;
+    function updateCharts(){
+      var now = Date.now();
+      if(now - _lastChartUpdate < 500) return;  // throttle: max 2 updates/sec
+      _lastChartUpdate = now;
+      var h = history.value;
+      if(!h || !h.length) return;
+
+      var r = Math.min(300, h.length);
+      var d = h.slice(-r);
+      var tx = d.map(function(_,i){ return i-r+1; });
+
+      // Overview: Power + Frequency
+      setChart(charts.ovPower, makeOpt(tx,
+        [
+          {name:'功率', data:d.map(function(x){return x.totalPower;}), lineStyle:{color:'#ffb74d'}, areaStyle:{color:'rgba(255,183,77,.08)'}},
+          {name:'计划', data:d.map(function(x){return x.schedulePower;}), lineStyle:{color:'#448aff',type:'dashed'}},
+          {name:'频率', data:d.map(function(x){return x.frequency;}), lineStyle:{color:'#00d4c8'}, yAxisIndex:1}
+        ],
+        {yAxis:[{type:'value',name:'MW'},{type:'value',name:'Hz'}]}
+      ));
+
+      // Overview: Wind + Pitch
+      setChart(charts.ovWind, makeOpt(tx,
+        [
+          {name:'风速', data:d.map(function(x){return x.windSpeed;}), lineStyle:{color:'#00d4c8'}, areaStyle:{color:'rgba(0,212,200,.06)'}},
+          {name:'桨距角', data:d.map(function(x){return x.avgPitch;}), lineStyle:{color:'#e040fb'}, yAxisIndex:1}
+        ],
+        {yAxis:[{type:'value',name:'m/s'},{type:'value',name:'deg'}]}
+      ));
+
+      // Fleet bar
+      var tids = Object.keys(turbines).sort();
+      setChart(charts.fleetBar, makeOpt(tids,
+        [
+          {name:'功率MW', type:'bar', barMaxWidth:24, data:tids.map(function(id){ var t=turbines[id]||{}; return t.powerMW||0; }),
+           itemStyle:{color:function(p){ var v=p.value; return v>2.5?'#00c853':v>1?'#ffd600':'#ff9100'; }}},
+          {name:'风速', type:'line', data:tids.map(function(id){ var t=turbines[id]||{}; return t.windSpeedMs||0; }), lineStyle:{color:'#00d4c8',width:2}, yAxisIndex:1},
+          {name:'转速', type:'line', data:tids.map(function(id){ var t=turbines[id]||{}; return t.rotorSpeedRPM||0; }), lineStyle:{color:'#e040fb',width:1.5}, yAxisIndex:1}
+        ],
+        {yAxis:[{type:'value',name:'MW'},{type:'value',name:'m/s / RPM'}]}
+      ));
+
+      // S1: Power tracking
+      setChart(charts.sc1, makeOpt(tx,
+        [
+          {name:'实际功率', data:d.map(function(x){return x.totalPower;}), lineStyle:{color:'#00e676'}, areaStyle:{color:'rgba(0,230,118,.08)'}},
+          {name:'计划功率', data:d.map(function(x){return x.schedulePower;}), lineStyle:{color:'#448aff',type:'dashed'}},
+          {name:'MAE', data:d.map(function(x){return x.mae||0;}), lineStyle:{color:'#ff9100',width:1}, yAxisIndex:1}
+        ],
+        {yAxis:[{type:'value',name:'MW'},{type:'value',name:'MW'}], markLine:{silent:true,symbol:'none',data:[{yAxis:sim.schedulePower,lineStyle:{color:'#5a6d85',type:'dashed'}}]}}
+      ));
+
+      // S2: Wind speed + fluctuation
+      setChart(charts.sc2, makeOpt(tx,
+        [
+          {name:'风速', data:d.map(function(x){return x.windSpeed;}), lineStyle:{color:'#00d4c8',width:2}, areaStyle:{color:'rgba(0,212,200,.1)'}},
+          {name:'功率波动', data:d.map(function(x){return Math.abs(x.totalPower-x.schedulePower);}), lineStyle:{color:'#ff9100'}, yAxisIndex:1}
+        ],
+        {yAxis:[{type:'value',name:'m/s',min:0,max:30},{type:'value',name:'MW'}],
+         markLine:{silent:true,symbol:'none',data:[
+           {yAxis:3,label:{formatter:'切入'},lineStyle:{color:'#ffb74d',type:'dashed'}},
+           {yAxis:12,label:{formatter:'额定'},lineStyle:{color:'#00e676',type:'dashed'}},
+           {yAxis:25,label:{formatter:'切出'},lineStyle:{color:'#ff3d3d',type:'dashed'}}
+         ]}}
+      ));
+
+      // S3: Frequency
+      setChart(charts.sc3, makeOpt(tx,
+        [
+          {name:'频率', data:d.map(function(x){return x.frequency;}), lineStyle:{color:'#448aff',width:2}},
+          {name:'ROCOF', data:d.map(function(x){return (x.rocof*100)||0;}), lineStyle:{color:'#ff9100',width:1}, yAxisIndex:1}
+        ],
+        {yAxis:[{type:'value',name:'Hz',min:49.5,max:50.5},{type:'value',name:'ROCOFx100'}],
+         markLine:{silent:true,symbol:'none',data:[
+           {yAxis:50,lineStyle:{color:'#5a6d85',type:'dashed'}},
+           {yAxis:50.1,label:{formatter:'+DB'},lineStyle:{color:'#ff9100',type:'dashed'}},
+           {yAxis:49.9,label:{formatter:'-DB'},lineStyle:{color:'#ff9100',type:'dashed'}}
+         ]}}
+      ));
+
+      // S4: Ramp tracking
+      setChart(charts.sc4, makeOpt(tx,
+        [
+          {name:'实际功率', data:d.map(function(x){return x.totalPower;}), lineStyle:{color:'#ff9100',width:2}, areaStyle:{color:'rgba(255,145,0,.08)'}},
+          {name:'目标功率', data:d.map(function(x){return x.schedulePower;}), lineStyle:{color:'#448aff',type:'dashed',width:2}, step:'end'}
+        ],
+        {yAxis:{type:'value',name:'MW'}}
+      ));
+
+      // S5: Curtailment
+      setChart(charts.sc5, makeOpt(tx,
+        [
+          {name:'实际功率', data:d.map(function(x){return x.totalPower;}), lineStyle:{color:'#e040fb',width:2}, areaStyle:{color:'rgba(224,64,251,.08)'}},
+          {name:'可用功率', data:d.map(function(x){return Math.max(x.totalPower,x.schedulePower);}), lineStyle:{color:'#ffb74d',type:'dashed'}},
+          {name:'限电比%', data:d.map(function(x){return (x.curtailRatio||0)*100;}), lineStyle:{color:'#ff3d3d',width:1}, yAxisIndex:1}
+        ],
+        {yAxis:[{type:'value',name:'MW'},{type:'value',name:'%',max:100}]}
+      ));
+
+      // S6: Safety
+      setChart(charts.sc6, makeOpt(tx,
+        [
+          {name:'频率', data:d.map(function(x){return x.frequency;}), lineStyle:{color:'#ff3d3d',width:2}},
+          {name:'风速', data:d.map(function(x){return x.windSpeed;}), lineStyle:{color:'#ff9100',width:1.5}, yAxisIndex:1}
+        ],
+        {yAxis:[{type:'value',name:'Hz',min:49,max:51},{type:'value',name:'m/s',min:0,max:30}],
+         markLine:{silent:true,symbol:'none',data:[
+           {yAxis:50,lineStyle:{color:'#5a6d85'}},
+           {yAxis:25,label:{formatter:'切出'},lineStyle:{color:'#ff3d3d',type:'dashed',width:2}}
+         ]}}
+      ));
+    }
+
+    // Clock
+    var clockTimer = null;
+    function updClock(){
+      clock.value = new Date().toTimeString().slice(0,8);
+    }
+
+    // Lifecycle
+    _onMounted(function(){
+      _nextTick(function(){ initCharts(); });
+      connectSocket();
+      clockTimer = setInterval(updClock, 500);
+      updClock();
+      // Charts update only via SocketIO agc_update (throttled at 500ms)
+      _nextTick(function(){ updateCharts(); });
+    });
+
+    _watch(page, function(){
+      _nextTick(function(){
+        Object.values(charts).forEach(function(c){
+          try { if(c) c.resize(); } catch(e){}
+        });
+        initSceneCharts(page.value);
+      });
+    });
+
+    _onUnmounted(function(){
+      if(clockTimer) clearInterval(clockTimer);
+      if(socket) socket.disconnect();
+      Object.values(charts).forEach(function(c){
+        try { if(c) c.dispose(); } catch(e){}
+      });
+    });
+
+    return {
+      page: page, clock: clock, connected: connected,
+      clientCount: clientCount, consoleBox: consoleBox,
+      sim: sim, turbines: turbines, history: history,
+      alerts: alerts, consoleLines: consoleLines, sceneLog: sceneLog,
+      pageTitle: pageTitle, onlineCount: onlineCount,
+      turbineList: turbineList, utilPct: utilPct,
+      utilBarColor: utilBarColor, rpmBarPct: rpmBarPct,
+      curtailPct: curtailPct, curtailAlarm: curtailAlarm,
+      curtailLabel: curtailLabel, freqDelta: freqDelta,
+      freqAlarm: freqAlarm, voltAlarm: voltAlarm,
+      trackErr: trackErr, trackErrClass: trackErrClass,
+      droopDP: droopDP, s6Label: s6Label,
+      rampCompletePct: rampCompletePct, availPowerMW: availPowerMW,
+      fmtFreq: fmtFreq, fmtPower: fmtPower, fmtWind: fmtWind,
+      sceneIds: sceneIds, injections: injections,
+      scenePageId: scenePageId, sceneShortName: sceneShortName,
+      sceneFullName: sceneFullName, sceneDescText: sceneDescText,
+      sceneColorClass: sceneColorClass,
+      switchPage: switchPage, tileClass: tileClass,
+      reqScene: reqScene, selectS6: selectS6,
+      doInject: doInject, doReset: doReset, doRecover: doRecover
+    };
+  }
+});
+
+app.mount('#app');
+</script>
+</body>
+</html>
