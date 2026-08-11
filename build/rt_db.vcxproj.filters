@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\bronya\Downloads\windAGC-main\windAGC-main\储能协调控制器实时数据库与缓存模块详细设计\储能协调控制器实时数据库与缓存模块详细设计\src\rt_db\rt_db_api.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\bronya\Downloads\windAGC-main\windAGC-main\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{D6171D7E-EE7E-3AA9-85BB-428172C58129}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
