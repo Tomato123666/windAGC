@@ -1,0 +1,25 @@
+# Auto-detect text files, convert to LF on commit
+* text=auto
+
+# Windows batch files must be CRLF
+*.bat text eol=crlf
+
+# PowerShell scripts
+*.ps1 text eol=crlf
+
+# C/C++ source
+*.h text eol=lf
+*.cpp text eol=lf
+*.c text eol=lf
+
+# Python
+*.py text eol=lf
+
+# Docs
+*.md text eol=lf
+
+# Binary files (don't convert line endings)
+*.docx binary
+*.pptx binary
+*.xlsx binary
+*.pdf binary

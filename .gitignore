@@ -1,0 +1,77 @@
+# ============================================================
+# Claude Code local config (DO NOT COMMIT)
+# ============================================================
+.claude/
+
+# ============================================================
+# Build outputs (CMake + MSVC)
+# ============================================================
+build/
+out/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+
+# MSVC generated files
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Compiled binaries (not in tools/)
+*.exe
+*.dll
+*.lib
+*.obj
+*.exp
+*.pdb
+*.ilk
+*.aps
+
+# Exception: keep runner.exe as it's built manually (not by CMake)
+# If preferred, delete this line and build runner.exe yourself
+# !tools/data_generator/runner.exe
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ============================================================
+# OS generated
+# ============================================================
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ============================================================
+# Setup-generated (directory junction, created by setup.ps1)
+# ============================================================
+tools/rt_db_ref/
+
+# ============================================================
+# Test outputs (temporary)
+# ============================================================
+tools/data_generator/output/*.csv
+tools/data_generator/output/*.png
+
+# ============================================================
+# Misc
+# ============================================================
+*.tmp
+*.log
