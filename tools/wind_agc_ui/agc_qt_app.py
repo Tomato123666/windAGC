@@ -134,14 +134,17 @@ def ensure_rt_processes():
 
 
 def _shm_exists() -> bool:
-    """Check if shared memory is available."""
+    """Check if shared memory is available (stdlib only — no pywin32)."""
     try:
-        import win32file
-        import win32con
-        handle = win32file.OpenFileMapping(win32con.FILE_MAP_READ, False, "RT_DB_SHARED_MEMORY")
+        import ctypes
+        name = os.environ.get("RT_DB_SHM_NAME", "RT_DB_SHARED_MEMORY_WIND")
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenFileMappingW.restype = ctypes.c_void_p
+        kernel32.OpenFileMappingW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
+        FILE_MAP_READ = 0x0004
+        handle = kernel32.OpenFileMappingW(FILE_MAP_READ, False, name)
         if handle:
-            import win32api
-            win32api.CloseHandle(handle)
+            kernel32.CloseHandle(ctypes.c_void_p(handle))
             return True
     except Exception:
         pass
@@ -359,6 +362,9 @@ def main():
     parser.add_argument('--no-backend', action='store_true', help='Skip C++ backend launch')
     parser.add_argument('--server-only', action='store_true', help='Launch server only, no GUI')
     args = parser.parse_args()
+
+    # 区分光电/风电共享内存段名: C++ 代码通过 RT_DB_SHM_NAME 环境变量读取
+    os.environ.setdefault("RT_DB_SHM_NAME", "RT_DB_SHARED_MEMORY_WIND")
 
     print("=" * 60)
     print("  Wind-AGC Wind Farm AGC Monitoring Terminal v1.0")

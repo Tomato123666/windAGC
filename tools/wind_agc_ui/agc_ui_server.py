@@ -110,34 +110,33 @@ def bg_read_loop():
         try:
             s = get_shm()
             if s and s.connected:
-                # Read all SHM data
+                # Read all SHM data (flat points map)
                 data = s.read_all()
-                if data.get('input'):
-                    inp = data['input']
-                    SIM['frequency'] = inp.get('GRID.Frequency', SIM['frequency'])
-                    SIM['voltage'] = inp.get('GRID.Voltage', SIM['voltage'])
-                    SIM['schedulePower'] = inp.get('SCADA.PlanPower', SIM['schedulePower'])
-                    SIM['windSpeed'] = inp.get('WIND_AGC.WindSpeed', SIM['windSpeed'])
-                    SIM['commHealthy'] = inp.get('COMM.IsHealthy', True)
-                    SIM['curtailRatio'] = inp.get('CURTAIL.Ratio', 0.0)
-                    SIM['extremeType'] = int(inp.get('EXTREME.SubType', 0))
+                pts = data.get('points') or {}
 
-                    # Per-turbine data
-                    for i in range(1, 11):
-                        tid = f'WT_{i:02d}'
-                        if tid in SIM['turbines']:
-                            t = SIM['turbines'][tid]
-                            t['powerMW'] = inp.get(f'TURBINE_{i:02d}.Power', t['powerMW'])
-                            t['windSpeedMs'] = inp.get(f'TURBINE_{i:02d}.WindSpeed', t['windSpeedMs'])
-                            t['rotorSpeedRPM'] = inp.get(f'TURBINE_{i:02d}.RotorSpeed', t['rotorSpeedRPM'])
-                            t['pitchAngleDeg'] = inp.get(f'TURBINE_{i:02d}.PitchAngle', t['pitchAngleDeg'])
+                SIM['frequency'] = pts.get('GRID.Frequency', SIM['frequency'])
+                SIM['voltage'] = pts.get('GRID.Voltage', SIM['voltage'])
+                SIM['schedulePower'] = pts.get('WIND_AGC.SchedulePower', SIM['schedulePower'])
+                SIM['windSpeed'] = pts.get('WIND_AGC.WindSpeed', SIM['windSpeed'])
+                SIM['totalPower'] = pts.get('WIND_AGC.TotalPower', SIM['totalPower'])
+                SIM['powerSetpoint'] = pts.get('WIND_AGC.Setpoint', SIM['powerSetpoint'])
+                SIM['sceneActive'] = int(pts.get('WIND_AGC.Mode', SIM['sceneActive']))
+                SIM['s6Strategy'] = int(pts.get('SAFETY.CurrentMode', SIM['s6Strategy']))
+                SIM['commHealthy'] = pts.get('COMM.IsHealthy', True)
+                SIM['curtailRatio'] = pts.get('CURTAIL.Ratio', 0.0)
+                SIM['extremeType'] = int(pts.get('EXTREME.SubType', 0))
 
-                if data.get('output'):
-                    out = data['output']
-                    SIM['totalPower'] = out.get('WIND_AGC.TotalPower', SIM['totalPower'])
-                    SIM['powerSetpoint'] = out.get('WIND_AGC.Setpoint', SIM['powerSetpoint'])
-                    SIM['sceneActive'] = int(out.get('WIND_AGC.Mode', SIM['sceneActive']))
-                    SIM['s6Strategy'] = int(out.get('AGC.S6Strategy', SIM['s6Strategy']))
+                # Per-turbine data (C++ registers TURBINE_000 .. TURBINE_009, 0-based)
+                for i in range(1, 11):
+                    tid = f'WT_{i:02d}'
+                    if tid in SIM['turbines']:
+                        t = SIM['turbines'][tid]
+                        j = i - 1
+                        t['powerMW'] = pts.get(f'TURBINE_{j:03d}.Power', t['powerMW'])
+                        t['windSpeedMs'] = pts.get(f'TURBINE_{j:03d}.WindSpeed', t['windSpeedMs'])
+                        t['rotorSpeedRPM'] = pts.get(f'TURBINE_{j:03d}.RotorSpeed', t['rotorSpeedRPM'])
+                        t['pitchAngleDeg'] = pts.get(f'TURBINE_{j:03d}.PitchAngle', t['pitchAngleDeg'])
+                        t['targetMW'] = pts.get(f'TURBINE_{j:03d}.Command', t['targetMW'])
 
                 # Write heartbeat keepalive
                 now = time.time()
@@ -211,13 +210,13 @@ def bg_read_loop():
                 SIM['avgPitch'] = round(total_pitch / 10, 1)
 
             else:
-                # SHM connected – compute derived metrics from SHM data
+                # SHM connected – derive aggregate turbine metrics (farm total
+                # already comes from WIND_AGC.TotalPower above; do not overwrite it).
                 turbines = SIM['turbines']
                 online = [t for t in turbines.values() if t['avail']]
                 if online:
                     SIM['avgRpm'] = sum(t['rotorSpeedRPM'] for t in online) / len(online)
                     SIM['avgPitch'] = sum(t['pitchAngleDeg'] for t in online) / len(online)
-                    SIM['totalPower'] = sum(t['powerMW'] for t in online)
 
             # Compute ROCOF
             if HISTORY:

@@ -1,35 +1,92 @@
 #!/usr/bin/env python3
 """
 Wind-AGC Shared Memory Bridge
-Adapated from PV-ESS-AGC's agc_shm_bridge.py
-Connects to windAGC shared memory (RT_DB) via Windows named file mapping
-Uses seqlock protocol for atomic reads, struct for binary layout
+Connects to windAGC shared memory (RT_DB) via a Windows named file mapping.
+
+Fixed version — the original (adapted from PV-ESS-AGC) had two bugs:
+  1. It opened the mapping with pywin32's ``win32file.OpenFileMapping``, which
+     is not available on a stock Python install (caused the runtime
+     ``AttributeError``).  This version uses only the stdlib: ``mmap.mmap``
+     with ``tagname=...`` (plus ``struct`` for the binary layout).
+  2. The memory layout was wrong (copied from PV-ESS-AGC).  The real layout is
+     defined in ``src/rt_db/rt_db_structs.h`` and is reproduced below exactly.
+
+Binary layout (MSVC x64, i.e. ``time_t``=8, ``long``=4, ``LONG64``=8):
+
+    SharedMemoryHeader (48 bytes):
+        write_count         int64  @  0   (atomic_size_t = volatile LONG64)
+        shutdown_requested  int32  @  8   (atomic_bool    = volatile LONG)
+        (padding)                  @ 12
+        last_updated.tv_sec int64  @ 16
+        last_updated.tv_nsec int32 @ 24
+        (padding)                  @ 28
+        num_data_points     uint64 @ 32   (size_t)
+        connected_clients   int32  @ 40   (atomic_int = volatile LONG)
+        manager_pid         int32  @ 44   (pid_t)
+
+    DataPoint (120 bytes):
+        value        double @   0   (atomic_double = volatile double)
+        quality      int64  @   8   (atomic_long  = volatile LONG64)
+        sequence     int64  @  16   (atomic_long  = volatile LONG64)
+        timestamp.tv_sec  int64  @ 24
+        timestamp.tv_nsec int32 @ 32
+        (padding)                  @ 36
+        point_id     char[64] @ 40
+        units        char[16] @104
 """
-import ctypes
 import mmap
 import struct
 import os
 import time
 import threading
-from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Any
 
 # ============================================================
-# Constants matching C++ CommonTypes.h and RT_DB layout
+# Constants matching src/rt_db/rt_db_structs.h (Windows x64 / MSVC)
 # ============================================================
-SHM_NAME = "RT_DB_SHARED_MEMORY"
+MAX_DATAPOINTS = 20000
+MAX_POINT_ID_LEN = 64
+MAX_UNIT_LEN = 16
+
 HEADER_SIZE = 48
 DATAPOINT_SIZE = 120
-MAX_DATAPOINTS = 20000
-SHM_SIZE = HEADER_SIZE + DATAPOINT_SIZE * MAX_DATAPOINTS  # ~2.4MB
+# Header + data-point array (the command ring buffer after it is not needed).
+SHM_SIZE = HEADER_SIZE + DATAPOINT_SIZE * MAX_DATAPOINTS
 
-# Wind-specific tags
+# data_quality_t values (src/rt_db/rt_db_structs.h)
+QUALITY_BAD = 0
+QUALITY_GOOD = 1
+
+# ---- SharedMemoryHeader field offsets ----
+HDR_WRITE_COUNT       = 0    # int64
+HDR_SHUTDOWN          = 8    # int32
+HDR_LAST_UPDATED_SEC  = 16   # int64
+HDR_LAST_UPDATED_NSEC = 24   # int32
+HDR_NUM_DATA_POINTS   = 32   # uint64
+HDR_CONNECTED_CLIENTS = 40   # int32
+HDR_MANAGER_PID       = 44   # int32
+
+# ---- DataPoint field offsets ----
+DP_VALUE    = 0    # double
+DP_QUALITY  = 8    # int64 (LONG64)
+DP_SEQUENCE = 16   # int64 (LONG64)
+DP_TS_SEC   = 24   # int64
+DP_TS_NSEC  = 32   # int32
+DP_POINT_ID = 40   # char[64]
+DP_UNITS    = 104  # char[16]
+
+
+def shm_name() -> str:
+    """Segment name, overridable via RT_DB_SHM_NAME (mirrors C++ get_shm_name)."""
+    name = os.environ.get("RT_DB_SHM_NAME")
+    return name if name else "RT_DB_SHARED_MEMORY_WIND"
+
+
+# Wind-specific tags (indices follow the C++ backend: TURBINE_%03d, 0-based)
 INPUT_TAGS = [
     "GRID.Frequency",
-    "GRID.Voltage",
-    "PCC.TotalPower",
-    "SCADA.PlanPower",
-    "SCADA.Heartbeat",
+    "GRID.FrequencyDelta",
+    "SCADA.TotalPower",
     "WIND_AGC.WindSpeed",
     "WIND_AGC.SchedulePower",
     "COMM.IsHealthy",
@@ -41,267 +98,214 @@ OUTPUT_TAGS = [
     "WIND_AGC.TotalPower",
     "WIND_AGC.Setpoint",
     "WIND_AGC.Mode",
-    "AGC.SceneActive",
-    "AGC.S6Strategy",
-    "AGC.WindSpeedBaseline",
 ]
 
-# Per-turbine tags (10 turbines)
-for i in range(1, 11):
+# Per-turbine tags (C++ registers TURBINE_000 .. TURBINE_099, 0-based)
+for i in range(0, 10):
     INPUT_TAGS.extend([
-        f"TURBINE_{i:02d}.Power",
-        f"TURBINE_{i:02d}.WindSpeed",
-        f"TURBINE_{i:02d}.RotorSpeed",
-        f"TURBINE_{i:02d}.PitchAngle",
-        f"TURBINE_{i:02d}.Torque",
-        f"TURBINE_{i:02d}.State",
-        f"TURBINE_{i:02d}.Role",
-        f"TURBINE_{i:02d}.SafetyIndex",
+        f"TURBINE_{i:03d}.Power",
+        f"TURBINE_{i:03d}.WindSpeed",
+        f"TURBINE_{i:03d}.RotorSpeed",
+        f"TURBINE_{i:03d}.PitchAngle",
+        f"TURBINE_{i:03d}.UpMargin",
+        f"TURBINE_{i:03d}.DownMargin",
     ])
 
-for i in range(1, 11):
+for i in range(0, 10):
     OUTPUT_TAGS.extend([
-        f"TURBINE_{i:02d}.Setpoint",
-        f"TURBINE_{i:02d}.Command",
+        f"TURBINE_{i:03d}.Command",
     ])
-
-
-@dataclass
-class ShmHeader:
-    """Shared memory header layout (48 bytes)"""
-    magic: int = 0
-    version: int = 0
-    seq_lock: int = 0
-    point_count: int = 0
-    timestamp: int = 0
-    status: int = 0
-    reserved: List[int] = field(default_factory=lambda: [0] * 6)
 
 
 class AgcShmReader:
-    """Windows named shared memory reader using mmap + struct with seqlock protocol."""
+    """Windows named shared memory reader/writer (stdlib mmap + struct + seqlock)."""
 
     def __init__(self):
-        self._fd = None
         self._mm: Optional[mmap.mmap] = None
         self._tag_index: Dict[str, int] = {}
         self._connected = False
         self._lock = threading.Lock()
 
+    # ------------------------------------------------------------------ attach
     def attach(self) -> bool:
-        """Attach to RT_DB shared memory."""
+        """Open the RT_DB named file mapping using only the stdlib."""
+        name = shm_name()
         try:
-            import win32file
-            import win32con
-            import pywintypes
-
-            # Open existing file mapping
-            handle = win32file.OpenFileMapping(
-                win32con.FILE_MAP_READ | win32con.FILE_MAP_WRITE,
-                False,
-                SHM_NAME
-            )
-            if not handle:
-                print(f"[SHM] File mapping '{SHM_NAME}' not found — is rt_db_init.exe running?")
-                return False
-
-            self._mm = mmap.mmap(handle, SHM_SIZE, access=mmap.ACCESS_WRITE)
-            self._fd = handle
-            self._connected = True
-
-            # Build tag index by scanning data points
-            self._build_tag_index()
-            print(f"[SHM] Attached to '{SHM_NAME}' — {len(self._tag_index)} tags indexed")
-            return True
-
-        except ImportError:
-            # Fallback: try reading via ctypes
-            print("[SHM] pywin32 not found, trying ctypes fallback...")
-            return self._attach_ctypes()
-        except Exception as e:
-            print(f"[SHM] Attach failed: {e}")
+            # mmap.mmap(-1, size, tagname=...) does create-or-open on Windows.
+            # When rt_db_init.exe already holds the mapping, this opens it.
+            m = mmap.mmap(-1, SHM_SIZE, tagname=name, access=mmap.ACCESS_WRITE)
+        except (OSError, ValueError) as e:
+            print(f"[SHM] attach failed for '{name}': {e}")
             return False
 
-    def _attach_ctypes(self) -> bool:
-        """Fallback: attach via ctypes kernel32."""
+        # Guard against the "create" side of create-or-open: if rt_db_init is
+        # not running we would have created a brand-new empty segment. Treat
+        # that as not-available and release it so the backend can create it later.
         try:
-            kernel32 = ctypes.windll.kernel32
-            PAGE_READWRITE = 0x04
-            FILE_MAP_READ = 0x0004
-            FILE_MAP_WRITE = 0x0002
-
-            handle = kernel32.OpenFileMappingW(
-                FILE_MAP_READ | FILE_MAP_WRITE,
-                False,
-                SHM_NAME
-            )
-            if not handle:
-                print(f"[SHM] ctypes: file mapping '{SHM_NAME}' not found")
+            num_points = struct.unpack_from('<Q', m, HDR_NUM_DATA_POINTS)[0]
+            if num_points == 0:
+                m.close()
+                print(f"[SHM] mapping '{name}' is uninitialized — is rt_db_init.exe running?")
                 return False
-
-            self._fd = handle
-            # Read via ctypes directly (no mmap)
-            self._connected = True
-            self._build_tag_index_ctypes()
-            print(f"[SHM] ctypes: attached to '{SHM_NAME}' — {len(self._tag_index)} tags indexed")
-            return True
         except Exception as e:
-            print(f"[SHM] ctypes fallback failed: {e}")
+            m.close()
+            print(f"[SHM] attach verify failed: {e}")
             return False
 
+        self._mm = m
+        self._connected = True
+        self._build_tag_index()
+        print(f"[SHM] Attached to '{name}' — {len(self._tag_index)} tags indexed")
+        return True
+
+    # ----------------------------------------------------------- tag indexing
     def _build_tag_index(self):
-        """Build tag→offset index by reading SHM data point headers."""
-        # Read the data point table sequentially
+        """Scan data points, mapping point_id -> absolute SHM offset."""
+        self._tag_index.clear()
         for i in range(MAX_DATAPOINTS):
             offset = HEADER_SIZE + i * DATAPOINT_SIZE
-            try:
-                # Tag name is stored as 64-byte string at offset+0
-                tag_bytes = self._mm[offset:offset + 64]
-                tag_name = tag_bytes.rstrip(b'\x00').decode('utf-8', errors='replace').strip()
-                if tag_name:
-                    self._tag_index[tag_name] = offset
-            except Exception:
-                break
+            raw = self._mm[offset + DP_POINT_ID:offset + DP_POINT_ID + MAX_POINT_ID_LEN]
+            tag = raw.split(b'\x00', 1)[0].decode('utf-8', errors='replace').strip()
+            if not tag or tag.startswith("UNUSED_"):
+                continue
+            self._tag_index[tag] = offset
 
-    def _build_tag_index_ctypes(self):
-        """Build tag index via ctypes (read 48 bytes at a time for efficiency)."""
-        pass  # Deferred — use read_point for individual access
-
+    # ----------------------------------------------------------------- reads
     def read_point(self, tag: str) -> Optional[float]:
-        """Read a single data point value by tag name. Returns None if not found or locked."""
-        with self._lock:
-            if self._mm and tag in self._tag_index:
-                return self._read_with_seqlock(self._tag_index[tag])
-            elif self._fd and self._mm is None:
-                # ctypes fallback
-                return self._read_ctypes(tag)
+        """Read a single data point value by tag name (seqlock-protected)."""
+        if not self._mm:
             return None
+        with self._lock:
+            offset = self._tag_index.get(tag)
+            if offset is None:
+                return None
+            return self._read_with_seqlock(offset)
 
     def _read_with_seqlock(self, offset: int, retries: int = 3) -> Optional[float]:
-        """Seqlock-protected read of a float value from SHM."""
+        """Mirror of rt_db_get_value(): sequence is even when data is stable."""
         for _ in range(retries):
-            # Read sequence counter from header
-            header = struct.unpack_from('<IIIIII', self._mm, 0)
-            seq_before = header[2]
-
-            # Read value (float stored at offset+64)
-            value_offset = offset + 64
-            value = struct.unpack_from('<d', self._mm, value_offset)[0]
-
-            # Re-read sequence counter
-            header = struct.unpack_from('<IIIIII', self._mm, 0)
-            seq_after = header[2]
-
-            if seq_before == seq_after and seq_before % 2 == 0:
+            seq_before = struct.unpack_from('<q', self._mm, offset + DP_SEQUENCE)[0]
+            if seq_before % 2 != 0:
+                continue  # writer in progress
+            value = struct.unpack_from('<d', self._mm, offset + DP_VALUE)[0]
+            seq_after = struct.unpack_from('<q', self._mm, offset + DP_SEQUENCE)[0]
+            if seq_before == seq_after and seq_after % 2 == 0:
                 return value
-
         return None
 
     def read_all(self) -> Dict[str, Any]:
-        """Read all indexed data points. Returns dict with values."""
-        result = {"header": {}, "input": {}, "output": {}, "turbines": {}}
+        """Read the header plus every indexed point (flat ``points`` + grouped views)."""
+        result = {"header": {}, "points": {}, "input": {}, "output": {}, "turbines": {}}
 
-        # Read header
-        if self._mm:
-            header = struct.unpack_from('<IIIIII', self._mm, 0)
-            result["header"] = {
-                "magic": header[0], "version": header[1],
-                "seq_lock": header[2], "point_count": header[3],
-                "timestamp": header[4], "status": header[5]
-            }
+        if not self._mm:
+            return result
 
-        # Read all tags
+        result["header"] = {
+            "write_count":       struct.unpack_from('<Q', self._mm, HDR_WRITE_COUNT)[0],
+            "shutdown":          struct.unpack_from('<i', self._mm, HDR_SHUTDOWN)[0],
+            "last_updated_sec":  struct.unpack_from('<q', self._mm, HDR_LAST_UPDATED_SEC)[0],
+            "last_updated_nsec": struct.unpack_from('<i', self._mm, HDR_LAST_UPDATED_NSEC)[0],
+            "num_data_points":   struct.unpack_from('<Q', self._mm, HDR_NUM_DATA_POINTS)[0],
+            "connected_clients": struct.unpack_from('<i', self._mm, HDR_CONNECTED_CLIENTS)[0],
+            "manager_pid":       struct.unpack_from('<i', self._mm, HDR_MANAGER_PID)[0],
+        }
+
         for tag in self._tag_index:
             val = self.read_point(tag)
-            if val is not None:
-                if tag.startswith("TURBINE_"):
-                    result["turbines"][tag] = val
-                elif tag.startswith("WIND_AGC.") or tag.startswith("AGC."):
-                    result["output"][tag] = val
-                else:
-                    result["input"][tag] = val
+            if val is None:
+                continue
+            result["points"][tag] = val
+            if tag.startswith("WIND_AGC.") or tag.startswith("AGC."):
+                result["output"][tag] = val
+            else:
+                # Everything else (incl. TURBINE_*) is consumed as "input".
+                result["input"][tag] = val
+            if tag.startswith("TURBINE_"):
+                result["turbines"][tag] = val
 
         return result
 
-    def _read_ctypes(self, tag: str) -> Optional[float]:
-        """ctypes fallback single-point read."""
-        return None  # Simplified — full impl requires offset tracking
-
+    # ---------------------------------------------------------------- writes
     def write_point(self, tag: str, value: float) -> bool:
-        """Write a float value to a data point via SHM."""
-        if not self._connected:
+        """Write a value to a data point, mirroring rt_db_set_value()."""
+        if not self._mm:
             return False
         try:
             with self._lock:
-                if self._mm and tag in self._tag_index:
-                    value_offset = self._tag_index[tag] + 64
-                    self._mm[value_offset:value_offset + 8] = struct.pack('<d', value)
-                    return True
+                offset = self._tag_index.get(tag)
+                if offset is None:
+                    return False
+
+                # Begin write: bump sequence to odd (writer active).
+                seq = struct.unpack_from('<q', self._mm, offset + DP_SEQUENCE)[0]
+                struct.pack_into('<q', self._mm, offset + DP_SEQUENCE, seq + 1)
+
+                # Update payload.
+                struct.pack_into('<d', self._mm, offset + DP_VALUE, float(value))
+                struct.pack_into('<q', self._mm, offset + DP_QUALITY, QUALITY_GOOD)
+                now_ns = time.time_ns()
+                struct.pack_into('<q', self._mm, offset + DP_TS_SEC, now_ns // 1_000_000_000)
+                struct.pack_into('<i', self._mm, offset + DP_TS_NSEC, now_ns % 1_000_000_000)
+
+                # End write: bump sequence to even (data stable).
+                struct.pack_into('<q', self._mm, offset + DP_SEQUENCE, seq + 2)
+
+                # Global metadata.
+                wc = struct.unpack_from('<Q', self._mm, HDR_WRITE_COUNT)[0]
+                struct.pack_into('<Q', self._mm, HDR_WRITE_COUNT, wc + 1)
+                return True
         except Exception as e:
             print(f"[SHM] Write error '{tag}': {e}")
         return False
 
-    # ---- High-level write helpers (wind-specific) ----
-
+    # ------------------------------------------- high-level write helpers
     def set_plan(self, mw: float):
-        """Set dispatch plan (MW)."""
-        self.write_point("SCADA.PlanPower", mw)
         self.write_point("WIND_AGC.SchedulePower", mw)
 
     def set_comm(self, healthy: bool):
-        """Set communication health flag."""
         self.write_point("COMM.IsHealthy", 1.0 if healthy else 0.0)
 
     def set_curtail_ratio(self, ratio: float):
-        """Set curtailment ratio (0.0–1.0)."""
         self.write_point("CURTAIL.Ratio", max(0.0, min(1.0, ratio)))
 
     def set_extreme_weather(self, sub_type: int):
-        """Set extreme weather sub-type (0=None, 1=CutOut, 2=HighTurb, 3=StormRide)."""
         self.write_point("EXTREME.SubType", float(sub_type))
 
     def set_freq(self, hz: float):
-        """Set grid frequency (Hz)."""
         self.write_point("GRID.Frequency", hz)
 
     def set_voltage(self, pu: float):
-        """Set grid voltage (per unit)."""
-        self.write_point("GRID.Voltage", pu)
+        # No GRID.Voltage point exists in the C++ registration; best-effort no-op.
+        pass
 
     def set_wind_speed(self, ms: float):
-        """Set average wind speed (m/s)."""
         self.write_point("WIND_AGC.WindSpeed", ms)
 
     def request_scene(self, scene_id: int):
-        """Request scene switch (1–6)."""
-        self.write_point("AGC.SceneActive", float(scene_id))
+        self.write_point("WIND_AGC.Mode", float(scene_id))
 
     def set_s6_strategy(self, strategy: int):
-        """Set S6 safety strategy (1=Hold, 2=RampDown, 3=Feather)."""
-        self.write_point("AGC.S6Strategy", float(strategy))
+        # No AGC.S6Strategy point exists; best-effort no-op.
+        pass
 
     def set_turbine_setpoint(self, turbine_id: int, mw: float):
-        """Set power setpoint for a specific turbine."""
-        tag = f"TURBINE_{turbine_id:02d}.Setpoint"
-        self.write_point(tag, mw)
+        self.write_point(f"TURBINE_{turbine_id:03d}.Command", mw)
 
     def full_reset(self):
-        """Reset all output signals to defaults."""
         self.write_point("WIND_AGC.TotalPower", 0.0)
         self.write_point("WIND_AGC.Setpoint", 0.0)
         self.write_point("WIND_AGC.Mode", 1.0)
-        self.write_point("AGC.SceneActive", 1.0)
-        self.write_point("AGC.S6Strategy", 0.0)
-        self.write_point("AGC.WindSpeedBaseline", 8.0)
-        for i in range(1, 11):
-            self.write_point(f"TURBINE_{i:02d}.Setpoint", 0.0)
-            self.write_point(f"TURBINE_{i:02d}.Command", 0.0)
+        for i in range(0, 10):
+            self.write_point(f"TURBINE_{i:03d}.Command", 0.0)
 
+    # --------------------------------------------------------------- teardown
     def detach(self):
-        """Detach from shared memory."""
         self._connected = False
         if self._mm:
-            self._mm.close()
+            try:
+                self._mm.close()
+            except Exception:
+                pass
             self._mm = None
         self._tag_index.clear()
 
@@ -315,15 +319,15 @@ class AgcShmReader:
 
 
 # ============================================================
-# Test / smoke-test entry
+# Smoke-test entry
 # ============================================================
 if __name__ == "__main__":
     reader = AgcShmReader()
     if reader.attach():
         print(f"Connected: {reader.tag_count} tags")
+        print("header:", reader.read_all()["header"])
         for t in INPUT_TAGS[:10]:
-            v = reader.read_point(t)
-            print(f"  {t} = {v}")
+            print(f"  {t} = {reader.read_point(t)}")
         reader.detach()
     else:
         print("Not connected — run rt_db_init.exe first")
