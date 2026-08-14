@@ -10,7 +10,16 @@ namespace unified {
 
 class UnifiedLogger : public common::RtDbLoggerBase {
 public:
-    UnifiedLogger() : common::RtDbLoggerBase("UnifiedAGC") {}
+    explicit UnifiedLogger(int turbineCount = 10)
+        : common::RtDbLoggerBase("UnifiedAGC"), turbineCount_(turbineCount) {
+        for (int i = 0; i < MAX_TURBINES; i++) {
+            idxTurbPower_[i]   = (size_t)-1;
+            idxTurbWind_[i]    = (size_t)-1;
+            idxTurbRotor_[i]   = (size_t)-1;
+            idxTurbPitch_[i]   = (size_t)-1;
+            idxTurbCommand_[i] = (size_t)-1;
+        }
+    }
 
     /** 写入整个农场状态到共享内存 */
     void logFarmState(const FarmStatus& farm, int activeScene) {
@@ -34,6 +43,19 @@ public:
         writePoint(idxExtremeType_,   (double)(int)farm.extremeType);
         writePoint(idxReserveUp_,     farm.reserveUpMW);
         writePoint(idxReserveDn_,     farm.reserveDownMW);
+
+        // 风机级数据（风机阵列）
+        int n = (int)farm.turbines.size();
+        if (n > turbineCount_) n = turbineCount_;
+        if (n > MAX_TURBINES) n = MAX_TURBINES;
+        for (int i = 0; i < n; i++) {
+            const auto& t = farm.turbines[i];
+            writePoint(idxTurbPower_[i],   t.powerMW);
+            writePoint(idxTurbWind_[i],    t.windSpeedMs);
+            writePoint(idxTurbRotor_[i],   t.rotorSpeedRPM);
+            writePoint(idxTurbPitch_[i],   t.pitchAngleDeg);
+            writePoint(idxTurbCommand_[i], t.powerSetMW);
+        }
     }
 
 protected:
@@ -54,9 +76,24 @@ protected:
         registerPoint("CURTAIL.ReserveUp",          &idxReserveUp_);
         registerPoint("CURTAIL.ReserveDown",        &idxReserveDn_);
         registerPoint("EXTREME.SubType",            &idxExtremeType_);
+
+        // 风机级数据点 TURBINE_000 .. TURBINE_(N-1)
+        char buf[64];
+        int n = turbineCount_;
+        if (n > MAX_TURBINES) n = MAX_TURBINES;
+        for (int i = 0; i < n; i++) {
+            snprintf(buf, sizeof(buf), "TURBINE_%03d.Power", i);      registerPoint(buf, &idxTurbPower_[i]);
+            snprintf(buf, sizeof(buf), "TURBINE_%03d.WindSpeed", i);  registerPoint(buf, &idxTurbWind_[i]);
+            snprintf(buf, sizeof(buf), "TURBINE_%03d.RotorSpeed", i); registerPoint(buf, &idxTurbRotor_[i]);
+            snprintf(buf, sizeof(buf), "TURBINE_%03d.PitchAngle", i); registerPoint(buf, &idxTurbPitch_[i]);
+            snprintf(buf, sizeof(buf), "TURBINE_%03d.Command", i);    registerPoint(buf, &idxTurbCommand_[i]);
+        }
     }
 
 private:
+    static const int MAX_TURBINES = 100;
+    int turbineCount_ = 10;
+
     size_t idxTotalPower_ = -1, idxSchedulePower_ = -1, idxSetpoint_ = -1;
     size_t idxErrorPU_ = -1, idxMode_ = -1, idxWindSpeed_ = -1;
     size_t idxFluctuation_ = -1, idxCycleCount_ = -1, idxFreq_ = -1;
@@ -64,6 +101,12 @@ private:
     size_t idxFrozenPower_ = -1, idxCurtailRatio_ = -1, idxExtremeType_ = -1;
     size_t idxReserveUp_ = -1, idxReserveDn_ = -1;
     int writeCount_ = 0;
+
+    size_t idxTurbPower_[MAX_TURBINES];
+    size_t idxTurbWind_[MAX_TURBINES];
+    size_t idxTurbRotor_[MAX_TURBINES];
+    size_t idxTurbPitch_[MAX_TURBINES];
+    size_t idxTurbCommand_[MAX_TURBINES];
 };
 
 } // namespace unified

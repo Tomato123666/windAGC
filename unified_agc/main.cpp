@@ -57,7 +57,7 @@ int main() {
     agc.initialize();
 
     // ---- Connect output logger (writes farm state to SM) ----
-    unified::UnifiedLogger logger;
+    unified::UnifiedLogger logger((int)cfg.turbineCount);
     if (logger.initialize()) {
         agc.setLogger(&logger);
         printf("[OUT] Logger connected\n");

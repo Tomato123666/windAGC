@@ -74,6 +74,15 @@ void UnifiedAGC::step(const DispatchCommand& cmd, double dtSec) {
             t.powerMW += (t.powerSetMW - t.powerMW) * 0.3;
     }
 
+    // Derive per-turbine mechanical state (rotor speed / pitch angle) from wind
+    // speed so the 风机阵列 view has real values.
+    for (auto& t : farm_.turbines) {
+        double ws = t.windSpeedMs;
+        double ratio = ws / 12.0;  // rated wind speed
+        t.rotorSpeedRPM = (ws <= 3.0) ? 0.0 : 14.0 * (ratio > 1.0 ? 1.0 : ratio);
+        t.pitchAngleDeg = (ws > 12.0) ? ((ws - 12.0) * 2.0 > 20.0 ? 20.0 : (ws - 12.0) * 2.0) : 0.0;
+    }
+
     double total = 0;
     for (auto& t : farm_.turbines) total += t.powerMW;
     farm_.totalPowerMW = total;
