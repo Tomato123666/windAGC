@@ -11,7 +11,12 @@
 #include <conio.h>
 #define sleep(x) Sleep((x) * 1000)
 static HANDLE g_shared_memory_handle = NULL;
-static const char* SHARED_MEMORY_NAME = "RT_DB_SHARED_MEMORY";
+// 段名可由环境变量 RT_DB_SHM_NAME 覆盖（风电专用段），
+// 未设置时使用默认段名，实现光电/风电共享内存段区分
+static const char* get_shm_name(void) {
+    const char* name = getenv("RT_DB_SHM_NAME");
+    return (name != NULL && name[0] != '\0') ? name : "RT_DB_SHARED_MEMORY_WIND";
+}
 static volatile bool g_shutdown_requested = false;
 #else
 #include <sys/shm.h>
@@ -48,7 +53,7 @@ int create_shared_memory_segment(void** shm_addr) {
         PAGE_READWRITE,
         0,
         sizeof(SharedMemorySegment),
-        SHARED_MEMORY_NAME
+        get_shm_name()
     );
     
     if (g_shared_memory_handle == NULL) {
@@ -328,6 +333,16 @@ void initialize_shared_memory_segment(SharedMemorySegment* segment) {
             strncpy(segment->data_points[slot].units,    s_units[i],  MAX_UNIT_LEN - 1);
             atomic_init(&segment->data_points[slot].quality, QUALITY_GOOD);
             slot++;
+        }
+    }
+
+    // 通信健康默认置为"正常"，避免统一AGC启动即误判为"通信中断"而进入场景6安全模式。
+    // （其余输入点由 unified_agc 的区间校验保护，唯独 COMM.IsHealthy 是 >0.5 即判健康，
+    //   0 会被当作"丢失"，因此必须给出非零初值。）
+    for (size_t i = 0; i < slot; i++) {
+        if (strcmp(segment->data_points[i].point_id, "COMM.IsHealthy") == 0) {
+            segment->data_points[i].value = 1.0;
+            segment->data_points[i].quality = QUALITY_GOOD;
         }
     }
 
